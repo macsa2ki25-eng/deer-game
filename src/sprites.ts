@@ -1,0 +1,117 @@
+/**
+ * ドット絵。文字列の配列＝1文字1ピクセル、PAL のキーで色を指す。
+ * 仮絵（プログラマ絵）。P1 で本番の絵に差し替えるが、形式はこのままでよい。
+ *
+ * スコア表示は下段のDOMが持つので、ここにはゲーム画面に出るものしか無い。
+ */
+
+/** 32色以内。SFC の制約に合わせると絵が締まる。 */
+const PAL: Record<string, string | null> = {
+  ".": null,
+  "1": "#201a24", // 輪郭・影
+  "2": "#3d2b1f", // フンの本体
+  "3": "#6b4a2f", // フンのハイライト
+  "4": "#a87a4a", // 鹿の胴
+  "5": "#d9b98a",
+  "6": "#f2e3c8",
+  "7": "#2f4a2a",
+  "8": "#4e7a3a",
+  "9": "#7fae4e",
+  d: "#c04a3a", // 警告
+  e: "#e88a3a", // ランドセル
+  f: "#3a5f9e", // 服
+  g: "#6e88b8",
+  h: "#2a2f38",
+};
+
+const PLAYER_A = [
+  "....2222....", "...222222...", "..22222222..", "..22222222..",
+  "..22222222..", "...222222...", ".5ffffffff5.", ".5feeeeeef5.",
+  ".5feeeeeef5.", ".5feeeeeef5.", "..ffffffff..", "..ff3333ff..",
+  "...33..33...", "...55..55...", "...55..55...", "..111..111..",
+];
+const PLAYER_B = [
+  "....2222....", "...222222...", "..22222222..", "..22222222..",
+  "..22222222..", "...222222...", ".5ffffffff5.", ".5feeeeeef5.",
+  ".5feeeeeef5.", ".5feeeeeef5.", "..ffffffff..", "..ff3333ff..",
+  "..33....33..", "..55....55..", "...55..55...", "..111..111..",
+];
+
+const DEER_A = [
+  "...33......33...", "...34444444443..", "....44444444....", ".....444444.....",
+  ".....414414.....", ".....444444.....", "......4444......", "......5115......",
+  "......4444......", ".....444444.....", "...4444444444...", "..444444444444..",
+  "..446444444644..", "..444444444444..", "..464444444464..", "...4444444444...",
+  "...33......33...", "...11......11...",
+];
+const DEER_B = [
+  "...33......33...", "...34444444443..", "....44444444....", ".....444444.....",
+  ".....414414.....", ".....444444.....", "......4444......", "......5115......",
+  "......4444......", ".....444444.....", "...4444444444...", "..444444444444..",
+  "..446444444644..", "..444444444444..", "..464444444464..", "...4444444444...",
+  "..33........33..", "..11........11..",
+];
+
+/**
+ * 鹿のフンは丸いコロコロ。1粒4×4。
+ * これがまとまって落ちていたり、散っていたりする（配置は level.ts）。
+ */
+const PELLET_A = [".11.", "1321", "1221", ".11."];
+const PELLET_B = [".11.", "1231", "1221", ".11."];
+/** たまにある大きいの。 */
+const PELLET_BIG = ["..111..", ".13221.", "1322221", "1222221", "1222221", ".12221.", "..111.."];
+
+const TOURIST = [
+  "....hhhh....", "...hhhhhh...", "..hhhhhhhh..", "..hhhhhhhh..",
+  "...hhhhhh...", ".5gggggggg5.", ".5gggggggg5.", ".5gggggggg5.",
+  ".5gggggggg5.", "..gggggggg..", "..gggggggg..", "..hhhhhhhh..",
+  "...hh..hh...", "...hh..hh...", "...hh..hh...", "...hh..hh...",
+  "...11..11...", "............",
+];
+
+/** 予兆の矢印。鹿が入ってくる辺に出す。 */
+const WARN_DOWN = ["ddddddd", ".ddddd.", "..ddd..", "...d..."];
+const WARN_RIGHT = ["d...", "dd..", "ddd.", "dddd", "ddd.", "dd..", "d..."];
+const WARN_LEFT = ["...d", "..dd", ".ddd", "dddd", ".ddd", "..dd", "...d"];
+
+export type Sprite = HTMLCanvasElement;
+
+function bake(rows: string[]): Sprite {
+  const w = rows[0].length;
+  const h = rows.length;
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const x = c.getContext("2d")!;
+  const img = x.createImageData(w, h);
+  for (let y = 0; y < h; y++) {
+    if (rows[y].length !== w) {
+      throw new Error(`sprite row ${y} is ${rows[y].length} wide, expected ${w}`);
+    }
+    for (let i = 0; i < w; i++) {
+      const col = PAL[rows[y][i]];
+      const o = (y * w + i) * 4;
+      if (!col) {
+        img.data[o + 3] = 0;
+        continue;
+      }
+      img.data[o] = parseInt(col.slice(1, 3), 16);
+      img.data[o + 1] = parseInt(col.slice(3, 5), 16);
+      img.data[o + 2] = parseInt(col.slice(5, 7), 16);
+      img.data[o + 3] = 255;
+    }
+  }
+  x.putImageData(img, 0, 0);
+  return c;
+}
+
+export const SPR = {
+  player: [bake(PLAYER_A), bake(PLAYER_B)],
+  deer: [bake(DEER_A), bake(DEER_B)],
+  pellet: [bake(PELLET_A), bake(PELLET_B)],
+  pelletBig: bake(PELLET_BIG),
+  tourist: bake(TOURIST),
+  warnDown: bake(WARN_DOWN),
+  warnRight: bake(WARN_RIGHT),
+  warnLeft: bake(WARN_LEFT),
+};
