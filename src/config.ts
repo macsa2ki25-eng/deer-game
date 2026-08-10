@@ -163,8 +163,12 @@ export const SCATTER_JITTER_Y = 6;
 
 /** 立ち止まった鹿が落とす粒の数と間隔。 */
 export const POOPER_PELLETS = 7;
-export const POOPER_INTERVAL = 0.13;
-export const POOPER_STOP = 1.5;
+export const POOPER_INTERVAL = 0.08;
+/**
+ * 立ち止まる時間。長いと、落とし終わる頃には流されて画面の下にいる。
+ * 上の方で「ぶりぶり」させて、こちらが避ける時間を作る。
+ */
+export const POOPER_STOP = 0.75;
 
 // ---- 安全回廊 ----
 
@@ -242,7 +246,9 @@ export const ENCIRCLE_DRAIN = 0.5;
 /** 囲まれているあいだの移動速度。 */
 export const ENCIRCLE_SLOW = 0.3;
 /** 解放直後、すぐ捕まらない猶予[s]。 */
-export const ENCIRCLE_GRACE = 1.2;
+export const ENCIRCLE_GRACE = 1.3;
+/** 解放時に鹿を外へ押しのける距離[px]。密着したまま戻ると轢かれる。 */
+export const RELEASE_PUSH = 26;
 
 /** この距離に入った鹿は、せんべいに気づいて寄ってくる。 */
 export const NOTICE_RADIUS = 96;

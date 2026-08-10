@@ -241,8 +241,11 @@ export function newDeer(x: number, y: number, kind: DeerKind, sp: number, vx: nu
  */
 export function spawnFeedingScene(s: State): void {
   const n = C.sceneDeer(s.dist);
-  const cx = freeCentre(s, C.SCENE_RADIUS + C.DEER_BOX.w / 2 + 4);
-  if (cx === null) return;
+  // 回廊の上に出す。フンだらけの端に出しても、そもそも近寄らないので障害物にならない。
+  const cx = Math.max(
+    C.PATH.x0 + C.SCENE_RADIUS + 8,
+    Math.min(C.PATH.x1 - C.SCENE_RADIUS - 8, s.corridor),
+  );
   const host: Tourist = { x: cx - 6, y: C.ENTRY_Y - 6, feeding: true };
   s.tourists.push(host);
   for (let i = 0; i < n; i++) {

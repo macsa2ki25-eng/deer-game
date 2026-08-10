@@ -7,7 +7,7 @@ import { sfx } from "./audio";
 import type { InputState } from "./input";
 
 /** 立ち止まってフンをし始める y。画面に入りきってから始める。 */
-const POOPER_TRIGGER_Y = 34;
+const POOPER_TRIGGER_Y = 0;
 
 function overlap(
   ax: number, ay: number, aw: number, ah: number,
@@ -101,7 +101,7 @@ function updatePooper(s: State, d: Deer, dt: number): void {
   if (d.dropsLeft > 0 && d.y > POOPER_TRIGGER_Y) {
     d.squat = C.POOPER_STOP;
     d.sp = 0;
-    d.dropIn = 0.25;
+    d.dropIn = 0.05;
     sfx.snort();
   }
 }
@@ -206,11 +206,23 @@ function release(s: State): void {
   s.encircled = false;
   s.grace = C.ENCIRCLE_GRACE;
   s.swarmCount = 0;
+
+  // 囲みが解けた瞬間、鹿は密着したまま「ふつうの鹿」に戻る。
+  // そのままだと目の前の数頭に立て続けに轢かれて、フンを一度も踏まずに終わる。
+  // 外へ散らしたうえで、離れるまでの無敵時間も与える。
+  const cx = s.px + C.PLAYER.w / 2;
+  const cy = s.py + C.PLAYER.h / 2;
   for (const d of s.deer) {
     if (!d.swarm) continue;
     d.swarm = false;
     d.sp = C.deerSpeed(s.dist) * C.TILE;
+    const dx = d.x + C.DEER_BOX.w / 2 - cx;
+    const dy = d.y + C.DEER_BOX.h / 2 - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    d.x += (dx / len) * C.RELEASE_PUSH;
+    d.y += (dy / len) * C.RELEASE_PUSH;
   }
+  s.inv = Math.max(s.inv, C.ENCIRCLE_GRACE);
   banner(s, "せんべいが なくなった", 1.3);
 }
 
