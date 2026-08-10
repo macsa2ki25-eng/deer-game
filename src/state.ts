@@ -1,16 +1,24 @@
 import * as C from "./config";
 
-export type DeerKind = "walk" | "homing" | "stag" | "side";
+export type DeerKind = "walk" | "homing" | "stag" | "side" | "pooper";
 export type Edge = "top" | "left" | "right";
+export type Mode = "endless" | "stage";
+export type Phase = "menu" | "playing" | "over" | "clear";
 
 export interface Deer {
   x: number;
   y: number;
   kind: DeerKind;
-  /** 縦の相対速度[px/s]。横入り鹿は0。 */
+  /** 縦の相対速度[px/s]。横入り鹿と、立ち止まっている鹿は0。 */
   sp: number;
-  /** 横速度[px/s]。横入り鹿以外は0。 */
+  /** 横速度[px/s]。 */
   vx: number;
+  /** 立ち止まってフンをしている残り時間[s]。0より大きいあいだは止まる。 */
+  squat: number;
+  /** 次の粒を落とすまで[s]。 */
+  dropIn: number;
+  /** あと何粒落とすか。 */
+  dropsLeft: number;
 }
 
 export interface Poop {
@@ -18,10 +26,16 @@ export interface Poop {
   y: number;
   /** 大きいのは当たり判定も広いが、かすめたときの見返りも大きい。 */
   big: boolean;
-  /** 0/1 の絵の違い。 */
   variant: number;
   /** 一度かすめた粒は二度と点にならない。 */
   grazed: boolean;
+}
+
+/** 当たり判定の無い小石。回廊の輪郭を隠すためだけに存在する。 */
+export interface Pebble {
+  x: number;
+  y: number;
+  variant: number;
 }
 
 export interface Tourist {
@@ -32,30 +46,30 @@ export interface Tourist {
 export interface Warn {
   edge: Edge;
   kind: DeerKind;
-  /** 残り時間[s]。0になると鹿が出る。 */
   t: number;
   x: number;
   y: number;
 }
 
-export type Phase = "title" | "playing" | "over";
-
 export interface State {
   phase: Phase;
-  /** 進んだ距離[m]。1m = 1タイル = 16px。難易度はすべてこれの関数。 */
-  dist: number;
-  score: number;
-  best: number;
-  dirt: number;
+  mode: Mode;
+  /** ステージモードでの番号（1〜100）。 */
+  stage: number;
 
-  /** かすめた粒の累計。 */
+  /** 難易度を決める距離[m]。ステージモードでは stageDifficulty + progress。 */
+  dist: number;
+  /** そのプレイで実際に進んだ距離[m]。表示とクリア判定に使う。 */
+  progress: number;
+  /** ステージのゴール距離[m]。エンドレスでは 0。 */
+  goal: number;
+
+  score: number;
+  dirt: number;
   grazeCount: number;
-  /** 被弾の内訳。調整用の指標で、UIには出さない。 */
   poopHits: number;
   deerHits: number;
-  /** かすめるほど溜まり、離れると落ちる。倍率 = 1 + これ。 */
   grazeGauge: number;
-  /** 倍率。表示用にここへ写しておく。 */
   mult: number;
 
   px: number;
@@ -72,12 +86,15 @@ export interface State {
 
   corridor: number;
   corridorDir: number;
+  /** 回廊の半幅。行ごとに揺らして「フンの無い帯」を見えにくくする。 */
+  corridorHalf: number;
 
   deerTimer: number;
   touristTimer: number;
   restShown: number;
 
   poops: Poop[];
+  pebbles: Pebble[];
   deer: Deer[];
   tourists: Tourist[];
   warns: Warn[];
@@ -85,15 +102,17 @@ export interface State {
   touristsOn: boolean;
 }
 
-export function createState(best: number): State {
-  const s = { phase: "title", best, touristsOn: true } as State;
+export function createState(): State {
+  const s = { phase: "menu", mode: "endless", stage: 1, touristsOn: false } as State;
   resetRun(s);
   return s;
 }
 
-/** 1プレイぶんの初期化。ベストスコアと設定は残す。 */
+/** 1プレイぶんの初期化。設定は残す。 */
 export function resetRun(s: State): void {
-  s.dist = 0;
+  s.progress = 0;
+  s.dist = s.mode === "stage" ? C.stageDifficulty(s.stage) : 0;
+  s.goal = s.mode === "stage" ? C.stageLength(s.stage) : 0;
   s.score = 0;
   s.dirt = 0;
   s.grazeCount = 0;
@@ -112,10 +131,12 @@ export function resetRun(s: State): void {
   s.scrollPx = 0;
   s.corridor = (C.PATH.x0 + C.PATH.x1) / 2;
   s.corridorDir = Math.random() < 0.5 ? -1 : 1;
+  s.corridorHalf = (C.CORRIDOR_HALF_MIN + C.CORRIDOR_HALF_MAX) / 2;
   s.deerTimer = 1.6;
   s.touristTimer = 3;
   s.restShown = 0;
   s.poops = [];
+  s.pebbles = [];
   s.deer = [];
   s.tourists = [];
   s.warns = [];

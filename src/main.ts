@@ -1,4 +1,4 @@
-/** 起動・画面合わせ・ループ・下段UIの配線。 */
+/** 起動・画面合わせ・ループ・画面遷移の配線。 */
 
 import * as C from "./config";
 import { createState, resetRun, type State } from "./state";
@@ -7,51 +7,35 @@ import { buildBackground } from "./background";
 import { step } from "./game";
 import { render } from "./render";
 import { unlock, setEnabled } from "./audio";
-
-const KEY = { best: "mtd.best", sound: "mtd.sound", tourists: "mtd.tourists" };
-
-function load<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw === null ? fallback : (JSON.parse(raw) as T);
-  } catch {
-    return fallback;
-  }
-}
-
-function save(key: string, value: unknown): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    /* プライベートモード等では保存を諦める */
-  }
-}
+import * as store from "./storage";
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
-const stage = $<HTMLDivElement>("stage");
+const stageEl = $<HTMLDivElement>("stage");
 const canvas = $<HTMLCanvasElement>("screen");
-const overlay = $<HTMLDivElement>("overlay");
-const ovTitle = $<HTMLDivElement>("ov-title");
-const ovBody = $<HTMLDivElement>("ov-body");
-const ovBtn = $<HTMLButtonElement>("ov-btn");
 const rotate = $<HTMLDivElement>("rotate");
 const pad = $<HTMLDivElement>("pad");
 const padFinger = $<HTMLDivElement>("pad-finger");
 const padBody = $<HTMLDivElement>("pad-body");
-const gear = $<HTMLButtonElement>("gear");
-const settings = $<HTMLDivElement>("settings");
-const soundInput = $<HTMLInputElement>("sound");
-const touristInput = $<HTMLInputElement>("tourists");
+const screens = $<HTMLDivElement>("screens");
+const quitBtn = $<HTMLButtonElement>("quit");
 
 const el = {
   score: $<HTMLSpanElement>("score"),
+  scoreLabel: $<HTMLSpanElement>("score-label"),
   best: $<HTMLSpanElement>("best"),
+  goalLabel: $<HTMLSpanElement>("goal-label"),
   mult: $<HTMLSpanElement>("mult"),
   dist: $<HTMLSpanElement>("dist"),
   graze: $<HTMLSpanElement>("graze"),
   gauge: $<HTMLElement>("gauge"),
   dirt: $<HTMLDivElement>("dirt"),
+};
+
+const sc = {
+  title: $<HTMLElement>("sc-title"),
+  stages: $<HTMLElement>("sc-stages"),
+  result: $<HTMLElement>("sc-result"),
 };
 
 canvas.width = C.VIEW.w;
@@ -60,7 +44,18 @@ const ctx = canvas.getContext("2d", { alpha: false })!;
 ctx.imageSmoothingEnabled = false;
 
 const bg = buildBackground();
-const state: State = createState(load(KEY.best, 0));
+const state: State = createState();
+
+const stars = store.loadStars();
+let ranking = store.loadRanking();
+let soundOn = store.loadSound();
+state.touristsOn = store.loadTourists();
+setEnabled(soundOn);
+
+const soundInput = $<HTMLInputElement>("sound");
+const touristInput = $<HTMLInputElement>("tourists");
+soundInput.checked = soundOn;
+touristInput.checked = state.touristsOn;
 
 const dirtBlocks: HTMLSpanElement[] = [];
 for (let i = 0; i < C.DIRT_MAX; i++) {
@@ -69,86 +64,271 @@ for (let i = 0; i < C.DIRT_MAX; i++) {
   dirtBlocks.push(b);
 }
 
-// 観光客は「観光客モード」の駒。エンドレスの核ではないので既定は切っておく。
-state.touristsOn = load(KEY.tourists, false);
-let soundOn = load(KEY.sound, true);
-setEnabled(soundOn);
-soundInput.checked = soundOn;
-touristInput.checked = state.touristsOn;
-
 const input = attachInput(pad, { onFirstInput: unlock });
 
 /**
- * ゲーム画面は整数倍でしか拡大しない。
- * 端数倍にするとピクセルの大きさが揃わず、スクロール中にちらつく。
- * 下段に十分な高さを残すため、画面高の 52% を上限にする。
+ * ゲーム画面は横幅いっぱいに広げる（左右に余白を作らない）。
+ * 縦に伸びすぎると下段が潰れるので、画面高の46%で頭打ちにする。
  */
 function resize(): void {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const raw = Math.min(vw / C.VIEW.w, (vh * 0.52) / C.VIEW.h);
-  const scale = raw >= 1 ? Math.floor(raw) : raw;
-  stage.style.width = `${Math.round(C.VIEW.w * scale)}px`;
-  stage.style.height = `${Math.round(C.VIEW.h * scale)}px`;
+  const widthLimitedByHeight = vh * 0.46 * (C.VIEW.w / C.VIEW.h);
+  stageEl.style.width = `${Math.floor(Math.min(vw, 560, widthLimitedByHeight))}px`;
   rotate.classList.toggle("show", vw > vh * 1.25);
 }
-
 window.addEventListener("resize", resize);
 window.addEventListener("orientationchange", resize);
 resize();
 
-function showOverlay(title: string, body: string, button: string): void {
-  ovTitle.textContent = title;
-  ovBody.innerHTML = body;
-  ovBtn.textContent = button;
-  overlay.classList.remove("hide");
+// ---------- 画面遷移 ----------
+
+type ScreenName = "title" | "stages" | "result" | null;
+
+function showScreen(name: ScreenName): void {
+  for (const k of ["title", "stages", "result"] as const) {
+    sc[k].classList.toggle("show", k === name);
+  }
+  screens.classList.toggle("show", name !== null);
+  quitBtn.hidden = name !== null;
+  if (name === "title") renderRanking($<HTMLOListElement>("rank-list"), -1);
 }
 
-function startRun(): void {
+// ---------- ランキング ----------
+
+function renderRanking(list: HTMLOListElement, highlight: number): void {
+  list.innerHTML = "";
+  if (ranking.length === 0) {
+    const p = document.createElement("li");
+    p.className = "empty";
+    p.textContent = "まだ記録がありません";
+    list.appendChild(p);
+    return;
+  }
+  ranking.forEach((e, i) => {
+    const li = document.createElement("li");
+    if (i + 1 === highlight) li.className = "me";
+    li.innerHTML =
+      `<span class="n">${i + 1}</span>` +
+      `<span class="d">${Math.floor(e.dist)}m・${e.graze}かすめ</span>` +
+      `<span class="s">${Math.floor(e.score).toLocaleString("en-US")}</span>`;
+    list.appendChild(li);
+  });
+}
+
+// ---------- ステージ選択 ----------
+
+let viewArea = 0;
+
+function starGlyphs(n: number): string {
+  let out = "";
+  for (let i = 0; i < 3; i++) out += i < n ? "★" : '<span class="off">★</span>';
+  return out;
+}
+
+function renderAreas(): void {
+  const wrap = $<HTMLDivElement>("area-list");
+  wrap.innerHTML = "";
+  for (let a = 0; a < C.AREA_COUNT; a++) {
+    const b = document.createElement("button");
+    const open = store.areaUnlocked(stars, a);
+    b.type = "button";
+    b.className = "area-btn" + (a === viewArea ? " on" : "") + (open ? "" : " locked");
+    b.innerHTML = `<span class="num">${a + 1}</span>${open ? C.AREA_NAMES[a] : "？？？"}`;
+    if (open) {
+      b.addEventListener("click", () => {
+        viewArea = a;
+        renderStageSelect();
+      });
+    } else {
+      b.disabled = true;
+    }
+    wrap.appendChild(b);
+  }
+}
+
+function renderStageSelect(): void {
+  renderAreas();
+  $<HTMLDivElement>("area-name").textContent = C.AREA_NAMES[viewArea];
+  const got = store.areaStars(stars, viewArea);
+  $<HTMLDivElement>("area-meta").textContent = `★${got} / ${C.STAGES_PER_AREA * 3}`;
+
+  const hint = $<HTMLDivElement>("area-hint");
+  if (viewArea + 1 < C.AREA_COUNT && !store.areaUnlocked(stars, viewArea + 1)) {
+    const need = C.AREA_UNLOCK_STARS - got;
+    hint.textContent = need > 0
+      ? `つぎのエリアまで ★あと ${need}`
+      : "つぎのエリアが あきました";
+  } else {
+    hint.textContent = "";
+  }
+
+  const wrap = $<HTMLDivElement>("stage-list");
+  wrap.innerHTML = "";
+  for (let i = 0; i < C.STAGES_PER_AREA; i++) {
+    const n = viewArea * C.STAGES_PER_AREA + i + 1;
+    const open = store.stageUnlocked(stars, n);
+    const got2 = stars[n - 1];
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "stage-btn" + (open ? "" : " locked") + (got2 > 0 ? " cleared" : "");
+    b.innerHTML = `${n}<span class="stars">${open ? starGlyphs(got2) : "&nbsp;"}</span>`;
+    if (open) b.addEventListener("click", () => startStage(n));
+    else b.disabled = true;
+    wrap.appendChild(b);
+  }
+}
+
+// ---------- プレイ開始 ----------
+
+function beginRun(): void {
   unlock();
   resetRun(state);
   state.phase = "playing";
-  overlay.classList.add("hide");
-  settings.classList.remove("show");
+  showScreen(null);
+  updateStats();
 }
 
-ovBtn.addEventListener("click", startRun);
-gear.addEventListener("click", () => settings.classList.toggle("show"));
+function startEndless(): void {
+  state.mode = "endless";
+  beginRun();
+}
+
+function startStage(n: number): void {
+  state.mode = "stage";
+  state.stage = n;
+  beginRun();
+}
+
+$<HTMLButtonElement>("btn-endless").addEventListener("click", startEndless);
+$<HTMLButtonElement>("btn-stage").addEventListener("click", () => {
+  unlock();
+  renderStageSelect();
+  showScreen("stages");
+});
+$<HTMLButtonElement>("btn-back-title").addEventListener("click", () => showScreen("title"));
+quitBtn.addEventListener("click", () => {
+  state.phase = "menu";
+  showScreen(state.mode === "stage" ? "stages" : "title");
+  if (state.mode === "stage") renderStageSelect();
+});
 
 soundInput.addEventListener("change", () => {
   soundOn = soundInput.checked;
   setEnabled(soundOn);
-  save(KEY.sound, soundOn);
+  store.saveSound(soundOn);
 });
-
 touristInput.addEventListener("change", () => {
   state.touristsOn = touristInput.checked;
-  save(KEY.tourists, state.touristsOn);
+  store.saveTourists(state.touristsOn);
 });
-
 pad.addEventListener("pointerdown", () => pad.classList.add("touched"));
 
-showOverlay(
-  "下ばっか見てると",
-  "下のパッドをなぞって歩く。<br>フンの<b>すぐそば</b>を通ると倍率が上がる。",
-  "はじめる",
-);
+// ---------- リザルト ----------
 
-/** 数字の更新は毎フレーム要らない。マーカーだけ毎フレーム動かす。 */
-let statsTimer = 0;
+const resultTitle = $<HTMLDivElement>("result-title");
+const resultStars = $<HTMLDivElement>("result-stars");
+const resultLines = $<HTMLDivElement>("result-lines");
+const rankResult = $<HTMLDivElement>("rank-result");
+const btnNext = $<HTMLButtonElement>("btn-next");
+const btnRetry = $<HTMLButtonElement>("btn-retry");
+const btnBack = $<HTMLButtonElement>("btn-back");
+
+btnRetry.addEventListener("click", () => {
+  if (state.mode === "stage") startStage(state.stage);
+  else startEndless();
+});
+btnBack.addEventListener("click", () => {
+  if (state.mode === "stage") {
+    renderStageSelect();
+    showScreen("stages");
+  } else {
+    showScreen("title");
+  }
+});
+btnNext.addEventListener("click", () => {
+  const next = state.stage + 1;
+  if (next <= C.STAGE_COUNT && store.stageUnlocked(stars, next)) startStage(next);
+  else {
+    renderStageSelect();
+    showScreen("stages");
+  }
+});
+
+function finishRun(cleared: boolean): void {
+  const num = (v: number) => Math.floor(v).toLocaleString("en-US");
+
+  if (state.mode === "stage") {
+    rankResult.hidden = true;
+    if (cleared) {
+      const got = C.starsFor(state.dirt);
+      store.recordStars(stars, state.stage, got);
+      resultTitle.textContent = "ゴール！";
+      resultStars.hidden = false;
+      resultStars.innerHTML = starGlyphs(got);
+      resultLines.innerHTML =
+        `スコア <b>${num(state.score)}</b><br>` +
+        `よごれ <b>${state.dirt}</b> ／ かすめ <b>${state.grazeCount}</b>`;
+      const next = state.stage + 1;
+      btnNext.hidden = !(next <= C.STAGE_COUNT && store.stageUnlocked(stars, next));
+    } else {
+      resultTitle.textContent = "くつが もうだめ";
+      resultStars.hidden = true;
+      resultLines.innerHTML =
+        `ステージ <b>${state.stage}</b>／ゴールまで <b>${Math.max(0, Math.ceil(state.goal - state.progress))}</b> m<br>` +
+        `かすめ <b>${state.grazeCount}</b>`;
+      btnNext.hidden = true;
+    }
+    btnBack.textContent = "ステージ選択";
+  } else {
+    const rank = store.recordScore(ranking, {
+      score: Math.floor(state.score),
+      dist: Math.floor(state.progress),
+      graze: state.grazeCount,
+      at: Date.now(),
+    });
+    ranking = store.loadRanking();
+    resultTitle.textContent = "くつが もうだめ";
+    resultStars.hidden = true;
+    resultLines.innerHTML =
+      `スコア <b>${num(state.score)}</b><br>` +
+      `きょり <b>${Math.floor(state.progress)}</b> m ／ かすめ <b>${state.grazeCount}</b>` +
+      (rank ? `<br>この端末で <b>${rank}位</b>` : "");
+    rankResult.hidden = false;
+    renderRanking($<HTMLOListElement>("rank-list2"), rank);
+    btnNext.hidden = true;
+    btnBack.textContent = "タイトルへ";
+  }
+  showScreen("result");
+}
+
+// ---------- HUD ----------
+
+function bestScore(): number {
+  return ranking.length ? ranking[0].score : 0;
+}
+
 function updateStats(): void {
   el.score.textContent = Math.floor(state.score).toLocaleString("en-US");
-  el.best.textContent = Math.floor(state.best).toLocaleString("en-US");
   el.mult.textContent = `×${state.mult.toFixed(2)}`;
-  el.dist.textContent = String(Math.floor(state.dist));
+  el.dist.textContent = String(Math.floor(state.progress));
   el.graze.textContent = String(state.grazeCount);
   el.gauge.style.width = `${(state.grazeGauge / C.GRAZE_MAX) * 100}%`;
   for (let i = 0; i < dirtBlocks.length; i++) {
     dirtBlocks[i].classList.toggle("on", i < state.dirt);
   }
+  if (state.mode === "stage") {
+    el.scoreLabel.textContent = `スコア（${state.stage}面）`;
+    el.goalLabel.textContent = "ゴールまで";
+    el.best.textContent = `${Math.max(0, Math.ceil(state.goal - state.progress))}`;
+  } else {
+    el.scoreLabel.textContent = "スコア";
+    el.goalLabel.textContent = "ベスト";
+    el.best.textContent = Math.floor(bestScore()).toLocaleString("en-US");
+  }
 }
 
-/** パッド上に、指の位置（輪郭）とキャラの実際の位置（点）を出す。ずれが操作の手応えになる。 */
+/** パッド上に、指の位置（輪）とキャラの実際の位置（点）を出す。ずれが操作の手応えになる。 */
 function updateMarkers(): void {
   const u = (state.px - REACH.x0) / (REACH.x1 - REACH.x0);
   const v = (state.py - REACH.y0) / (REACH.y1 - REACH.y0);
@@ -159,9 +339,12 @@ function updateMarkers(): void {
   padFinger.style.opacity = input.touching ? "0.75" : "0.25";
 }
 
+// ---------- ループ ----------
+
 const FIXED = 1 / 60;
 let last = 0;
 let acc = 0;
+let statsTimer = 0;
 let wasPlaying = false;
 
 function frame(now: number): void {
@@ -187,14 +370,9 @@ function frame(now: number): void {
     updateStats();
   }
 
-  if (wasPlaying && state.phase === "over") {
+  if (wasPlaying && state.phase !== "playing") {
     updateStats();
-    save(KEY.best, state.best);
-    showOverlay(
-      "くつが もうだめ",
-      `きょり ${Math.floor(state.dist)} m ／ グレイズ ${state.grazeCount}<br>スコア ${Math.floor(state.score).toLocaleString("en-US")}`,
-      "もういちど",
-    );
+    if (state.phase === "over" || state.phase === "clear") finishRun(state.phase === "clear");
   }
   wasPlaying = state.phase === "playing";
 
@@ -203,8 +381,12 @@ function frame(now: number): void {
 
 // ?debug=1 で内部状態を覗けるようにする。バランス調整の自動テストがここを使う。
 if (new URLSearchParams(location.search).has("debug")) {
-  (window as Window & { __mtd?: unknown }).__mtd = { state, reach: REACH, config: C };
+  (window as Window & { __mtd?: unknown }).__mtd = {
+    state, reach: REACH, config: C, stars,
+    startEndless, startStage,
+  };
 }
 
+showScreen("title");
 updateStats();
 requestAnimationFrame(frame);

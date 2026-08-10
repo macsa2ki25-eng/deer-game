@@ -17,6 +17,8 @@ const PAL: Record<string, string | null> = {
   "7": "#2f4a2a",
   "8": "#4e7a3a",
   "9": "#7fae4e",
+  a: "#8a8f7a", // 小石
+  b: "#b9b8a3", // 小石のハイライト
   d: "#c04a3a", // 警告
   e: "#e88a3a", // ランドセル
   f: "#3a5f9e", // 服
@@ -56,6 +58,14 @@ const DEER_B = [
  * 鹿のフンは丸いコロコロ。1粒4×4。
  * これがまとまって落ちていたり、散っていたりする（配置は level.ts）。
  */
+/**
+ * 小石。当たり判定は無く、回廊だけ綺麗に空いてしまうのを隠すために撒く。
+ * 灰色なので、近づけば茶色いフンと確実に見分けられる——避けゲーとしては公平。
+ */
+const PEBBLE_A = ["ba", "aa"];
+const PEBBLE_B = [".ba", "baa"];
+const PEBBLE_C = [".b.", "bab", ".a."];
+
 const PELLET_A = [".11.", "1321", "1221", ".11."];
 const PELLET_B = [".11.", "1231", "1221", ".11."];
 /** たまにある大きいの。 */
@@ -105,11 +115,16 @@ function bake(rows: string[]): Sprite {
   return c;
 }
 
+/** しゃがんだ鹿。脚を隠して胴を下げるだけで「用を足している」に見える。 */
+const DEER_SQUAT = ["................", "................", ...DEER_A.slice(0, 16)];
+
 export const SPR = {
   player: [bake(PLAYER_A), bake(PLAYER_B)],
   deer: [bake(DEER_A), bake(DEER_B)],
+  deerSquat: bake(DEER_SQUAT),
   pellet: [bake(PELLET_A), bake(PELLET_B)],
   pelletBig: bake(PELLET_BIG),
+  pebble: [bake(PEBBLE_A), bake(PEBBLE_B), bake(PEBBLE_C)],
   tourist: bake(TOURIST),
   warnDown: bake(WARN_DOWN),
   warnRight: bake(WARN_RIGHT),

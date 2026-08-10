@@ -1,10 +1,13 @@
 /** 1フレームぶんの更新。描画はここではやらない。 */
 
 import * as C from "./config";
-import type { State } from "./state";
-import { spawnRow, scheduleDeer, hatchDeer } from "./level";
+import type { State, Deer } from "./state";
+import { spawnRow, scheduleDeer, hatchDeer, dropFromDeer } from "./level";
 import { sfx } from "./audio";
 import type { InputState } from "./input";
+
+/** 立ち止まってフンをし始める y。画面に入りきってから始める。 */
+const POOPER_TRIGGER_Y = 34;
 
 function overlap(
   ax: number, ay: number, aw: number, ah: number,
@@ -49,10 +52,37 @@ function movePlayer(s: State, input: InputState, dt: number): void {
   s.py = Math.max(C.PLAY_Y.top, Math.min(C.PLAY_Y.bottom, s.py));
 }
 
+/** 道の途中で立ち止まってフンをする鹿。落ちた粒はその場の障害物になる。 */
+function updatePooper(s: State, d: Deer, dt: number): void {
+  if (d.squat > 0) {
+    d.squat -= dt;
+    d.dropIn -= dt;
+    if (d.dropIn <= 0 && d.dropsLeft > 0) {
+      dropFromDeer(s, d);
+      d.dropsLeft--;
+      d.dropIn = C.POOPER_INTERVAL;
+      sfx.plop();
+    }
+    if (d.squat <= 0) d.sp = C.deerSpeed(s.dist) * C.TILE; // 用が済んだら歩き出す
+    return;
+  }
+  if (d.dropsLeft > 0 && d.y > POOPER_TRIGGER_Y) {
+    d.squat = C.POOPER_STOP;
+    d.sp = 0;
+    d.dropIn = 0.25;
+    sfx.snort();
+  }
+}
+
 function moveEntities(s: State, vpx: number, dt: number): void {
   for (let i = s.poops.length - 1; i >= 0; i--) {
     s.poops[i].y += vpx * dt;
     if (s.poops[i].y > C.VIEW.h + 8) s.poops.splice(i, 1);
+  }
+
+  for (let i = s.pebbles.length - 1; i >= 0; i--) {
+    s.pebbles[i].y += vpx * dt;
+    if (s.pebbles[i].y > C.VIEW.h + 6) s.pebbles.splice(i, 1);
   }
 
   for (let i = s.tourists.length - 1; i >= 0; i--) {
@@ -65,6 +95,7 @@ function moveEntities(s: State, vpx: number, dt: number): void {
 
   for (let i = s.deer.length - 1; i >= 0; i--) {
     const d = s.deer[i];
+    if (d.kind === "pooper") updatePooper(s, d, dt);
     d.y += (vpx + d.sp) * dt;
     d.x += d.vx * dt;
     if (d.kind === "homing") {
@@ -84,7 +115,6 @@ function hurt(s: State, amount: number, inv: number): boolean {
   if (s.dirt >= C.DIRT_MAX) {
     s.dirt = C.DIRT_MAX;
     s.phase = "over";
-    if (s.score > s.best) s.best = s.score;
     sfx.over();
     return true;
   }
@@ -157,15 +187,20 @@ export function step(s: State, input: InputState, dt: number): void {
   if (s.phase !== "playing") return;
 
   const vpx = C.scrollSpeed(s.dist) * C.TILE;
-  s.dist += (vpx * dt) / C.TILE;
+  const metres = (vpx * dt) / C.TILE;
+  s.progress += metres;
+  // 難易度はエンドレスもステージも同じ式。ステージは開始地点をずらすだけ。
+  s.dist = s.mode === "stage" ? C.stageDifficulty(s.stage) + s.progress : s.progress;
   s.scrollPx += vpx * dt;
   s.walkAcc += vpx * dt;
 
   // 休憩区間に入った合図（緩急が無いとエンドレスは飽きる）
-  const restIndex = Math.floor(s.dist / C.REST_EVERY_M);
-  if (C.inRest(s.dist) && restIndex !== s.restShown) {
-    s.restShown = restIndex;
-    sfx.rest();
+  if (s.mode === "endless") {
+    const restIndex = Math.floor(s.dist / C.REST_EVERY_M);
+    if (C.inRest(s.dist) && restIndex !== s.restShown) {
+      s.restShown = restIndex;
+      sfx.rest();
+    }
   }
 
   s.rowAcc += vpx * dt;
@@ -219,5 +254,11 @@ export function step(s: State, input: InputState, dt: number): void {
     }
   }
 
-  s.score += ((vpx * dt) / C.TILE) * C.SCORE_PER_M * s.mult;
+  s.score += metres * C.SCORE_PER_M * s.mult;
+
+  if (s.mode === "stage" && s.progress >= s.goal) {
+    s.progress = s.goal;
+    s.phase = "clear";
+    sfx.clear();
+  }
 }

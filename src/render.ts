@@ -10,6 +10,11 @@ export function render(ctx: CanvasRenderingContext2D, s: State, bg: HTMLCanvasEl
   ctx.drawImage(bg, 0, off - STRIP_H);
   ctx.drawImage(bg, 0, off);
 
+  // 小石はフンより先に敷く。回廊の輪郭を消すのが役目なので目立たなくてよい。
+  for (const p of s.pebbles) {
+    ctx.drawImage(SPR.pebble[p.variant], Math.round(p.x), Math.round(p.y));
+  }
+
   for (const p of s.poops) {
     const spr = p.big ? SPR.pelletBig : SPR.pellet[p.variant];
     ctx.drawImage(spr, Math.round(p.x), Math.round(p.y));
@@ -20,6 +25,10 @@ export function render(ctx: CanvasRenderingContext2D, s: State, bg: HTMLCanvasEl
   }
 
   for (const d of s.deer) {
+    if (d.squat > 0) {
+      ctx.drawImage(SPR.deerSquat, Math.round(d.x), Math.round(d.y));
+      continue;
+    }
     const frame = Math.floor((s.walkAcc + d.y * 2) / 7) % 2;
     ctx.drawImage(SPR.deer[frame], Math.round(d.x), Math.round(d.y));
   }
