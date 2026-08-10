@@ -83,7 +83,10 @@ export function deerSpeed(dist: number): number {
 export function poopRate(dist: number): number {
   // 裾を長くしてある。時定数が短いと600m 付近で頭打ちになり、
   // それ以降なにも変化しなくなって「レベルが上がった感じ」が消える。
-  return (0.8 + 1.2 * (1 - Math.exp(-dist / 1400))) * WIDTH_K;
+  //
+  // 見せかけの道を入れてから増やした。空けておく帯が3本になったぶん、
+  // 同じ量では参道がスカスカに見え、フンを避けている感じが薄れる。
+  return (1.15 + 1.7 * (1 - Math.exp(-dist / 1400))) * WIDTH_K;
 }
 
 /** 鹿の出現間隔 [s] */
@@ -199,6 +202,40 @@ export const DRIFT_SAFETY = 0.35;
 export function corridorDrift(dist: number): number {
   return (DRIFT_SAFETY * LATERAL) / scrollSpeed(dist);
 }
+
+// ---- 見せかけの道（わだち） ----
+
+/**
+ * 「安全な道が丸見え」問題の本命の対策。
+ *
+ * 先に回廊を引いてその外にだけフンを置く、という作りは公平さのためには要る。
+ * しかし副作用として、フンの無い帯が画面にただ1本だけ現れる。
+ * 帯を隠そうとするのは筋が悪い——1本しか無いことが問題なので、
+ * 同じ幅・同じ見た目の帯を何本も出して、どれが本物か絵からは決まらないようにする。
+ *
+ * 偽物は数行で行き止まりになる。行き止まりは画面のいちばん上に現れるので、
+ * 気づいてから隣の帯へ移るまでに画面まるごと1枚ぶんの猶予がある——理不尽にはならない。
+ */
+export const DECOY_LANES = 2;
+/** 偽物の寿命[行]。1行 = 16px。 */
+export const DECOY_LIFE_MIN = 5;
+export const DECOY_LIFE_MAX = 13;
+/**
+ * 本物からこれ以上離れた偽物は、その場で行き止まりにする。
+ * 遠くまで連れて行かれてから塞がれると、戻る距離が長くなりすぎる。
+ */
+export const DECOY_REACH = 92;
+/** 帯どうしの隙間[px]。詰めすぎると2本が1本の太い帯に見えて元も子もない。 */
+export const LANE_GAP = 10;
+/** 行き止まりに敷く粒の数。 */
+export const LANE_CLOSE_PELLETS = 22;
+
+/**
+ * 偽物の半幅も、本物とまったく同じ範囲（CORRIDOR_HALF_MIN〜MAX）で行ごとに揺らす。
+ * 揺らさず固定にすると、幅が一定でないほうが本物だと分かってしまう。
+ * また本物だけ広くしても同じことなので、範囲を共有するのが要。
+ */
+export const LANE_HALF_NOMINAL = CORRIDOR_HALF_MAX;
 
 // ---- 小石（回廊の見た目を隠すための飾り。当たり判定は無い） ----
 

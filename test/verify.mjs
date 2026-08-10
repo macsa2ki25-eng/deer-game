@@ -71,7 +71,7 @@ function section(title) {
 function makeCorridorTracker() {
   const hist = [];
   return (s) => {
-    hist.push({ sp: s.scrollPx, c: s.corridor, half: s.corridorHalf });
+    hist.push({ sp: s.scrollPx, c: s.corridor, half: s.corridorHalf, decoys: s.decoys });
     if (hist.length > 700) hist.shift();
     const want = s.scrollPx - (s.py + 16);
     for (let i = hist.length - 1; i >= 0; i--) if (hist[i].sp <= want) return hist[i];
@@ -84,7 +84,7 @@ async function drive(page, pad, reach, seconds, steer, opts = {}) {
   const mults = [];
   const seen = {
     squat: 0, trees: 0, stalls: 0, maxSenbei: 0, fed: 0, banners: new Set(),
-    sleepers: 0, scene: 0, herd: 0, maxSwarm: 0, baits: 0,
+    sleepers: 0, scene: 0, herd: 0, maxSwarm: 0, baits: 0, decoys: 0,
   };
   // 操作は相対方式なので、目標の絶対位置ではなく「動かしたい差分」でマウスを動かす。
   // パッドの端に来たら、人と同じように指を離して真ん中に置き直す。
@@ -115,6 +115,7 @@ async function drive(page, pad, reach, seconds, steer, opts = {}) {
         phase: s.phase, progress: s.progress, level: s.level, score: s.score, dirt: s.dirt,
         graze: s.grazeCount, mult: s.mult, poopHits: s.poopHits, deerHits: s.deerHits,
         corridor: s.corridor, corridorHalf: s.corridorHalf, scrollPx: s.scrollPx,
+        decoys: s.decoys.map((d) => d.x),
         px: s.px, py: s.py, senbei: s.senbei, fed: s.fed,
         trees: s.trees.length, stalls: s.stalls.length, baits: s.baits.length,
         swarmCount: s.swarmCount,
@@ -135,6 +136,7 @@ async function drive(page, pad, reach, seconds, steer, opts = {}) {
     seen.herd = Math.max(seen.herd, s.walkers);
     seen.maxSwarm = Math.max(seen.maxSwarm, s.swarmCount);
     seen.baits = Math.max(seen.baits, s.baits);
+    seen.decoys = Math.max(seen.decoys, s.decoys.length);
     seen.stalls = Math.max(seen.stalls, s.stalls);
     seen.maxSenbei = Math.max(seen.maxSenbei, s.senbei);
     seen.fed = Math.max(seen.fed, s.fed);
@@ -204,6 +206,21 @@ check("エリア2以降はロック", (await page.locator("#area-list .area-btn.
 const pad = await page.locator("#pad").boundingBox();
 const reach = await page.evaluate(() => window.__mtd.reach);
 const followCorridor = (_s, lag) => lag.c - 6;
+
+/**
+ * 「空いて見えるほう」を選んでしまった人の再現。
+ * いちばん近い**見せかけの道**へ寄る（本物は選ばない）。偽物が1本も無いときだけ本物へ。
+ *
+ * 本物を混ぜて「近いほうを選ぶ」にすると、たまたま本物の上にいる走行では
+ * 一度も騙されないまま終わり、測っているものが走行ごとに変わってしまう。
+ */
+const followDecoy = (s, lag) => {
+  const ds = lag.decoys ?? [];
+  if (!ds.length) return lag.c - 6;
+  let best = ds[0];
+  for (const x of ds) if (Math.abs(x - s.px) < Math.abs(best - s.px)) best = x;
+  return best - 6;
+};
 
 await page.locator("#stage-list .stage-btn").first().click();
 await page.waitForTimeout(200);
@@ -323,10 +340,22 @@ const corridor = await drive(page, pad, reach, 40, followCorridor, { noDeer: tru
 check("回廊をなぞれば無傷で走り切れる", corridor.phase === "playing" && corridor.poopHits <= 1,
   `${corridor.progress.toFixed(0)}m / フン被弾 ${corridor.poopHits}`);
 
+section("見せかけの道：絵だけでは本物が決まらないか");
 await page.evaluate(() => window.__mtd.startEndless());
 await page.waitForTimeout(150);
+const decoy = await drive(page, pad, reach, 40, followDecoy, { noDeer: true });
+check("本物と同じ幅の空いた帯が何本も出る", decoy.decoys >= 2, `同時に最大 ${decoy.decoys + 1} 本`);
+check("空いて見えるほうへ歩くと行き止まる", decoy.poopHits > corridor.poopHits,
+  `被弾 ${decoy.poopHits} 対 回廊 ${corridor.poopHits}`);
+
+await page.evaluate(() => window.__mtd.startEndless());
+await page.waitForTimeout(150);
+// 縁を舐める線。粒は帯の縁（中心から half px）からいきなり始まるので、
+// かすめるだけで踏まない範囲は「中心から half−12 〜 half−4 px」。
+// v0.8 で塊を帯の縁ぎりぎりまで寄せたぶん、縁の外はもう舐める場所ではなく
+// ただの被弾地帯になった。ボットの振れ幅もそこに合わせる。
 const graze = await drive(page, pad, reach, 40, (_s, lag, t) =>
-  lag.c - 6 + Math.sin(t * 2.4) * (lag.half + 9), { noDeer: true });
+  lag.c - 6 + Math.sin(t * 2.4) * (lag.half - 6), { noDeer: true });
 check("縁を舐めるほうがよく稼げる", graze.perM > corridor.perM * 1.5,
   `縁 ${graze.perM.toFixed(2)} / 安全 ${corridor.perM.toFixed(2)} グレイズ/m`);
 check("そのぶん危ない", graze.poopHits > corridor.poopHits,

@@ -6,11 +6,16 @@
  * これで生成のやり直しが起きず、抜けられない配置も原理的に作られない。
  *
  * ただしそれをそのままやると、回廊だけフンの無い綺麗な帯になって
- * 「正解の道」が絵で丸見えになる。そこを隠すのが小石と回廊幅の揺らぎ。
+ * 「正解の道」が絵で丸見えになる。
+ * 対策は帯を隠すことではなく、同じ帯を何本も出すこと（見せかけの道＝わだち）。
+ * 偽物は数行で行き止まるが、行き止まりは画面の上端に現れるので逃げる時間はある。
  */
 
 import * as C from "./config";
 import type { State, DeerKind, Poop, Warn, Deer, Tourist } from "./state";
+
+/** フンを置いてはいけない帯。中心xと半幅。 */
+type Lane = { x: number; half: number };
 
 /** 行の基準となる出現 y。 */
 const BASE_Y = C.ENTRY_Y + 12;
@@ -46,41 +51,87 @@ function pellet(x: number, y: number, big: boolean): Poop {
   return { x, y, big, variant: Math.random() < 0.5 ? 0 : 1, grazed: false };
 }
 
+/** 本物の回廊だけ。木や寝ている鹿など、通れない物はこれを空ける。 */
+function corridorOnly(s: State): Lane[] {
+  return [{ x: s.corridor, half: s.corridorHalf }];
+}
+
+/** 本物＋見せかけ。フンはこのぜんぶを空ける。幅の揺らし方も同じ——幅で本物がバレないように。 */
+function allLanes(s: State): Lane[] {
+  const out: Lane[] = [{ x: s.corridor, half: s.corridorHalf }];
+  for (const d of s.decoys) out.push({ x: d.x, half: d.half });
+  return out;
+}
+
+/** 半幅を1行ぶん揺らす。本物にも偽物にも同じ関数を通す。 */
+function wobbleHalf(half: number): number {
+  return Math.max(
+    C.CORRIDOR_HALF_MIN,
+    Math.min(C.CORRIDOR_HALF_MAX, half + (Math.random() - 0.5) * 2.4),
+  );
+}
+
 /**
- * その粒を置いても回廊が塞がらないか。
+ * その粒を置いても帯が塞がらないか。
  *
- * 粒は行の基準 y から dy だけずれた位置に落ちる。ずれているあいだにも回廊は
- * 横に動いているので、ずれたぶんだけ余分に空けないと「1行ぶん古い回廊」の
+ * 粒は行の基準 y から dy だけずれた位置に落ちる。ずれているあいだにも帯は
+ * 横に動いているので、ずれたぶんだけ余分に空けないと「1行ぶん古い帯」の
  * 位置に粒を置いてしまう。ここを忘れると回廊は塞がる（実際に塞がった）。
  */
-function clearOfCorridor(s: State, x: number, w: number, dy: number): boolean {
+function clearOfLanes(s: State, lanes: Lane[], x: number, w: number, dy: number): boolean {
   const slack = (Math.abs(dy) / C.TILE) * C.corridorDrift(s.dist);
-  return Math.abs(x + w / 2 - s.corridor) >= s.corridorHalf + w / 2 + slack;
+  const c = x + w / 2;
+  for (const L of lanes) {
+    if (Math.abs(c - L.x) < L.half + w / 2 + slack) return false;
+  }
+  return true;
 }
 
 /**
- * 回廊の左右に残っている帯のどちらかから、中心を引く。
- * 「適当に置いて回廊に当たったら捨てる」だと塊がごっそり欠けて
+ * 帯と帯のあいだに残っている場所から、中心を引く。
+ * 「適当に置いて帯に当たったら捨てる」だと塊がごっそり欠けて
  * 参道がスカスカに見えるので、最初から置ける場所だけを選ぶ。
+ * 広い隙間ほど選ばれやすくして、帯の外がまんべんなく汚れるようにする。
  */
-function freeCentre(s: State, halfWidth: number): number | null {
-  const lo = C.PATH.x0 + halfWidth;
-  const hi = C.PATH.x1 - halfWidth;
-  const leftHi = s.corridor - s.corridorHalf - halfWidth;
-  const rightLo = s.corridor + s.corridorHalf + halfWidth;
+function freeCentre(lanes: Lane[], margin: number): number | null {
+  const lo = C.PATH.x0 + margin;
+  const hi = C.PATH.x1 - margin;
+  const blocked = lanes
+    .map((L) => [L.x - L.half - margin, L.x + L.half + margin] as [number, number])
+    .sort((a, b) => a[0] - b[0]);
 
   const bands: Array<[number, number]> = [];
-  if (leftHi > lo) bands.push([lo, leftHi]);
-  if (rightLo < hi) bands.push([rightLo, hi]);
-  if (bands.length === 0) return null;
+  let cur = lo;
+  for (const [a, b] of blocked) {
+    if (a > cur) bands.push([cur, Math.min(a, hi)]);
+    cur = Math.max(cur, b);
+  }
+  if (cur < hi) bands.push([cur, hi]);
 
-  const [a, b] = bands[Math.floor(Math.random() * bands.length)];
-  return a + Math.random() * (b - a);
+  const ok = bands.filter(([a, b]) => b > a);
+  if (!ok.length) return null;
+  const total = ok.reduce((t, [a, b]) => t + (b - a), 0);
+  let r = Math.random() * total;
+  for (const [a, b] of ok) {
+    if (r < b - a) return a + r;
+    r -= b - a;
+  }
+  return ok[0][0];
 }
 
+/**
+ * 塊の中心は帯のすぐ外から引く（余白2px）。
+ * こうすると粒が帯の縁まで攻めてきて、縁がぎざぎざになる。
+ * きっちり離すと、どの帯も両側が定規で引いたように揃ってしまう。
+ */
+const EDGE_MARGIN = 2;
+
 function placeCluster(s: State, yOffset: number): void {
+  const lanes = allLanes(s);
   const n = C.CLUSTER_MIN + Math.floor(Math.random() * (C.CLUSTER_MAX - C.CLUSTER_MIN + 1));
-  const cx = freeCentre(s, C.CLUSTER_RX);
+  // 半分は帯から離して置く。縁ばかりを狙うと、どの塊も帯に食われて半月型になり、
+  // 参道全体が薄くなる。離して置いた塊が「濃いところ」を作る。
+  const cx = freeCentre(lanes, Math.random() < 0.5 ? EDGE_MARGIN : C.CLUSTER_RX);
   if (cx === null) return;
 
   for (let i = 0; i < n; i++) {
@@ -89,30 +140,102 @@ function placeCluster(s: State, yOffset: number): void {
     const x = cx + Math.cos(a) * r * C.CLUSTER_RX;
     const dy = yOffset + Math.sin(a) * r * C.CLUSTER_RY;
     if (x < C.PATH.x0 || x > C.PATH.x1 - C.PELLET.w) continue;
-    if (!clearOfCorridor(s, x, C.PELLET.w, dy)) continue;
+    if (!clearOfLanes(s, lanes, x, C.PELLET.w, dy)) continue;
     s.poops.push(pellet(x, BASE_Y + dy, false));
   }
 }
 
 function placeScatter(s: State, yOffset: number): void {
+  const lanes = allLanes(s);
   const n = C.SCATTER_MIN + Math.floor(Math.random() * (C.SCATTER_MAX - C.SCATTER_MIN + 1));
-  const cx = freeCentre(s, C.SCATTER_SPREAD / 2);
+  const cx = freeCentre(lanes, EDGE_MARGIN);
   if (cx === null) return;
   for (let i = 0; i < n; i++) {
     const x = cx + (Math.random() - 0.5) * C.SCATTER_SPREAD;
     const dy = yOffset + (Math.random() - 0.5) * 2 * C.SCATTER_JITTER_Y;
     if (x < C.PATH.x0 || x > C.PATH.x1 - C.PELLET.w) continue;
-    if (!clearOfCorridor(s, x, C.PELLET.w, dy)) continue;
+    if (!clearOfLanes(s, lanes, x, C.PELLET.w, dy)) continue;
     s.poops.push(pellet(x, BASE_Y + dy, false));
   }
 }
 
 function placeBig(s: State, yOffset: number): void {
-  const cx = freeCentre(s, C.BIG_PELLET.w);
+  const lanes = allLanes(s);
+  const cx = freeCentre(lanes, C.BIG_PELLET.w / 2 + EDGE_MARGIN);
   if (cx === null) return;
   const x = cx - C.BIG_PELLET.w / 2;
-  if (!clearOfCorridor(s, x, C.BIG_PELLET.w, yOffset)) return;
+  if (!clearOfLanes(s, lanes, x, C.BIG_PELLET.w, yOffset)) return;
   s.poops.push(pellet(x, BASE_Y + yOffset, true));
+}
+
+/**
+ * 見せかけの道の行き止まり。塞がったと一目で分かるだけの量を敷く。
+ * 呼ぶのは偽物を s.decoys から外したあと——外す前だと、その帯を守って
+ * 1粒も置けない。
+ */
+function closeLane(s: State, x: number, laneHalf: number): void {
+  const lanes = allLanes(s);
+  const half = laneHalf + 4;
+  for (let i = 0; i < C.LANE_CLOSE_PELLETS; i++) {
+    const px = x - half + Math.random() * half * 2;
+    const dy = (Math.random() - 0.5) * 10;
+    if (px < C.PATH.x0 || px > C.PATH.x1 - C.PELLET.w) continue;
+    if (!clearOfLanes(s, lanes, px, C.PELLET.w, dy)) continue;
+    s.poops.push(pellet(px, BASE_Y + dy, false));
+  }
+}
+
+/**
+ * 見せかけの道を1行ぶん進める。寿命が尽きたもの、本物から離れすぎたものは塞ぐ。
+ * 足りなければ新しく引く。置ける場所が無い行は、そのまま次の行に持ち越す。
+ */
+function advanceDecoys(s: State): void {
+  const maxDrift = C.corridorDrift(s.dist);
+  const lo = C.PATH.x0 + C.LANE_HALF_NOMINAL + 2;
+  const hi = C.PATH.x1 - C.LANE_HALF_NOMINAL - 2;
+
+  for (let i = s.decoys.length - 1; i >= 0; i--) {
+    const d = s.decoys[i];
+    d.x += d.dir * Math.random() * maxDrift;
+    d.half = wobbleHalf(d.half);
+    if (d.x < lo) {
+      d.x = lo;
+      d.dir = 1;
+    } else if (d.x > hi) {
+      d.x = hi;
+      d.dir = -1;
+    } else if (Math.random() < 0.12) {
+      d.dir *= -1;
+    }
+    d.rows -= 1;
+    if (d.rows > 0 && Math.abs(d.x - s.corridor) <= C.DECOY_REACH) continue;
+    s.decoys.splice(i, 1);
+    closeLane(s, d.x, d.half);
+  }
+
+  // 空きがあれば引き直す。本物からも他の偽物からも、帯1本ぶん離す。
+  let tries = 14;
+  while (s.decoys.length < C.DECOY_LANES && tries-- > 0) {
+    const x = lo + Math.random() * (hi - lo);
+    if (Math.abs(x - s.corridor) > C.DECOY_REACH) continue;
+    const sep = C.LANE_HALF_NOMINAL * 2 + C.LANE_GAP;
+    if (Math.abs(x - s.corridor) < sep) continue;
+    if (s.decoys.some((d) => Math.abs(d.x - x) < sep)) continue;
+    s.decoys.push({
+      x,
+      dir: Math.random() < 0.5 ? -1 : 1,
+      half: wobbleHalf((C.CORRIDOR_HALF_MIN + C.CORRIDOR_HALF_MAX) / 2),
+      rows: C.DECOY_LIFE_MIN + Math.floor(Math.random() * (C.DECOY_LIFE_MAX - C.DECOY_LIFE_MIN + 1)),
+    });
+  }
+}
+
+/** その範囲にかかっている見せかけの道を消す。木や寝ている鹿が塞いだとき用。 */
+function dropDecoysNear(s: State, x0: number, x1: number): void {
+  for (let i = s.decoys.length - 1; i >= 0; i--) {
+    const d = s.decoys[i];
+    if (d.x > x0 - d.half && d.x < x1 + d.half) s.decoys.splice(i, 1);
+  }
 }
 
 /**
@@ -122,11 +245,14 @@ function placeBig(s: State, yOffset: number): void {
  */
 function placePebbles(s: State): void {
   const n = Math.floor(C.PEBBLE_RATE) + (Math.random() < C.PEBBLE_RATE % 1 ? 1 : 0);
+  const lanes = allLanes(s);
   for (let i = 0; i < n; i++) {
-    // 半分以上は回廊の中に置く。フンが入れない場所こそ埋めないと帯が消えない。
-    const inCorridor = Math.random() < C.PEBBLE_IN_CORRIDOR;
-    const x = inCorridor
-      ? s.corridor - s.corridorHalf + Math.random() * s.corridorHalf * 2
+    // 半分以上は帯の中に置く。フンが入れない場所こそ埋めないと帯が消えない。
+    // 本物か偽物かは選ばない——小石の散り方から本物が読めては意味がない。
+    const inLane = Math.random() < C.PEBBLE_IN_CORRIDOR;
+    const L = lanes[Math.floor(Math.random() * lanes.length)];
+    const x = inLane
+      ? L.x - L.half + Math.random() * L.half * 2
       : C.PATH.x0 + Math.random() * (C.PATH_W - 3);
     s.pebbles.push({
       x: Math.max(C.PATH.x0, Math.min(C.PATH.x1 - 3, x)),
@@ -148,11 +274,14 @@ function placeTree(s: State): void {
   // 半分にしていたら、押し出しで回廊の外へ突き飛ばされて回廊が意味を失った。
   const dy = C.TREE_BOX.h;
   const slack = (dy / C.TILE) * C.corridorDrift(s.dist);
-  const cx = freeCentre(s, C.TREE_BOX.w / 2 + slack + 2);
+  const lanes = corridorOnly(s);
+  const cx = freeCentre(lanes, C.TREE_BOX.w / 2 + slack + 2);
   if (cx === null) return;
   const x = cx - C.TREE_BOX.w / 2;
-  if (!clearOfCorridor(s, x, C.TREE_BOX.w, dy)) return;
+  if (!clearOfLanes(s, lanes, x, C.TREE_BOX.w, dy)) return;
   s.trees.push({ x, y: BASE_Y - C.TREE_BOX.h });
+  // 見せかけの道の上に立ったなら、それはもう行き止まり。
+  dropDecoysNear(s, x, x + C.TREE_BOX.w);
 }
 
 /**
@@ -173,24 +302,27 @@ function placeSleepers(s: State): void {
   const n = C.sleeperSize(s.dist);
   const spread = 8 + n * 4;
   const slack = ((C.DEER_BOX.h + 20) / C.TILE) * C.corridorDrift(s.dist);
-  const cx = freeCentre(s, spread / 2 + C.DEER_BOX.w / 2 + slack + 4);
+  const lanes = corridorOnly(s);
+  const cx = freeCentre(lanes, spread / 2 + C.DEER_BOX.w / 2 + slack + 4);
   if (cx === null) return;
   for (let i = 0; i < n; i++) {
     const x = cx + (Math.random() - 0.5) * spread - C.DEER_BOX.w / 2;
     const jitter = (Math.random() - 0.5) * 16;
     const y = C.ENTRY_Y + jitter;
     if (x < C.PATH.x0 || x > C.PATH.x1 - C.DEER_BOX.w) continue;
-    // clearOfCorridor は「行の基準 y からのずれ」を要る。
+    // clearOfLanes は「行の基準 y からのずれ」を要る。
     // ENTRY_Y は BASE_Y より12px上なので、そのぶんも足さないと見積もりが甘くなる。
     // さらに鹿は縦18pxあるので、体の高さも足しておく。
-    if (!clearOfCorridor(s, x, C.DEER_BOX.w, y - BASE_Y - C.DEER_BOX.h)) continue;
+    if (!clearOfLanes(s, lanes, x, C.DEER_BOX.w, y - BASE_Y - C.DEER_BOX.h)) continue;
     s.deer.push(newDeer(x, y, "sleeper", 0, 0));
   }
+  dropDecoysNear(s, cx - spread / 2, cx + spread / 2);
 }
 
 /** 1行(16px)ぶん。塊をいくつ置くかを距離から決める。 */
 export function spawnRow(s: State): void {
   advanceCorridor(s);
+  advanceDecoys(s);
   placePebbles(s);
   if (C.inRest(s.dist)) return;
 

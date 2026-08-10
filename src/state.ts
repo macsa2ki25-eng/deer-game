@@ -49,6 +49,20 @@ export interface Pebble {
   variant: number;
 }
 
+/**
+ * 見せかけの道（わだち）。
+ * 本物の安全回廊と同じ幅・同じ見た目で空いているが、寿命が尽きると行き止まる。
+ * これが無いと「フンの無い帯＝正解」と絵だけで分かってしまう。
+ */
+export interface Decoy {
+  x: number;
+  dir: number;
+  /** 半幅。本物と同じ範囲で揺らす——幅が違えば幅だけで本物が分かってしまう。 */
+  half: number;
+  /** 残り行数。0になったら塞ぐ。 */
+  rows: number;
+}
+
 /** 鹿せんべい売り場。通ると10枚もらえる。 */
 export interface Stall {
   x: number;
@@ -132,6 +146,8 @@ export interface State {
   corridor: number;
   corridorDir: number;
   corridorHalf: number;
+  /** 見せかけの道。本物と同じ幅で空いているが、やがて行き止まりになる。 */
+  decoys: Decoy[];
 
   deerTimer: number;
   touristTimer: number;
@@ -193,6 +209,7 @@ export function resetRun(s: State): void {
   s.corridor = (C.PATH.x0 + C.PATH.x1) / 2;
   s.corridorDir = Math.random() < 0.5 ? -1 : 1;
   s.corridorHalf = (C.CORRIDOR_HALF_MIN + C.CORRIDOR_HALF_MAX) / 2;
+  s.decoys = [];
   s.deerTimer = 1.2;
   s.touristTimer = 3;
   s.stallTimer = C.STALL_INTERVAL_MIN;
