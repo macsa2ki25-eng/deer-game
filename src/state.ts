@@ -106,10 +106,12 @@ export interface State {
   feedChain: number;
   feedChainT: number;
   feedCooldown: number;
-  /** もみくちゃで溜まる汚れの端数。 */
-  jostle: number;
-  /** 撒いた直後、鹿が寄ってこない時間。 */
-  scatterFree: number;
+  /** 群れに捕まっているか。せんべいが尽きるまで解けない。 */
+  encircled: boolean;
+  /** 次に1枚持っていかれるまで[s]。 */
+  drainT: number;
+  /** 解放直後の猶予[s]。 */
+  grace: number;
 
   level: number;
   banner: string;
@@ -173,8 +175,9 @@ export function resetRun(s: State): void {
   s.feedChain = 1;
   s.feedChainT = 0;
   s.feedCooldown = 0;
-  s.jostle = 0;
-  s.scatterFree = 0;
+  s.encircled = false;
+  s.drainT = 0;
+  s.grace = 0;
   s.level = C.levelOf(s.dist);
   s.banner = "";
   s.bannerT = 0;

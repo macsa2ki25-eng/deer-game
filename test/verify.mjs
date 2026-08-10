@@ -260,24 +260,40 @@ section("鹿せんべい");
 const senbei = await probe(20, 600, () => { window.__mtd.state.stallTimer = 0.1; });
 check("売り場が出る", senbei.stalls > 0);
 check("通ると10枚もらえる", senbei.maxSenbei === 10, `最大 ${senbei.maxSenbei} 枚`);
-check("持つと鹿に囲まれる", senbei.maxSwarm >= 3, `最大 ${senbei.maxSwarm} 頭にたかられた`);
-check("渡せる", senbei.fed > 0, `${senbei.fed} 頭に給餌`);
+check("鹿にぶつかると1枚渡して無事", senbei.fed > 0, `${senbei.fed} 頭に給餌`);
 
-// 撒いて逃げられるか
+// 囲まれて、枚数が尽きると解ける
 await page.evaluate(() => window.__mtd.startEndless());
 await page.waitForTimeout(140);
-const escaped = await page.evaluate(async () => {
+const caught = await page.evaluate(async () => {
   const s = window.__mtd.state;
-  s.progress = 600;
-  s.senbei = 10;
-  await new Promise((r) => setTimeout(r, 900));
-  const before = s.swarmCount;
-  window.__mtd.scatterSenbei(s);
-  await new Promise((r) => setTimeout(r, 400));
-  return { before, after: s.swarmCount, senbei: s.senbei, baits: s.baits.length };
+  s.progress = 620;
+  s.senbei = 4;
+  // 群れの真ん中に踏み込んだ状況を作る（歩いて突っ込む操作までは再現しない）
+  const C = window.__mtd.config;
+  for (let i = 0; i < 4; i++) {
+    s.deer.push({
+      x: s.px - 10 + i * 9, y: s.py - 12 + (i % 2) * 8, kind: "walk",
+      sp: 0, vx: 0, squat: 0, dropIn: 0, dropsLeft: 0,
+      swarm: false, orbit: i, lockX: 0, host: null,
+    });
+  }
+  void C;
+  const t0 = performance.now();
+  let sawEncircled = false;
+  let maxSwarm = 0;
+  while (performance.now() - t0 < 9000) {
+    s.dirt = 0;
+    if (s.encircled) sawEncircled = true;
+    maxSwarm = Math.max(maxSwarm, s.swarmCount);
+    if (sawEncircled && !s.encircled) break;
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  return { sawEncircled, maxSwarm, senbei: s.senbei, encircled: s.encircled };
 });
-check("撒くと囲みが解ける", escaped.after === 0 && escaped.senbei === 0,
-  `${escaped.before}頭 → ${escaped.after}頭 / 撒いたせんべい ${escaped.baits}`);
+check("群れに触れると囲まれる", caught.sawEncircled, `最大 ${caught.maxSwarm} 頭`);
+check("枚数が尽きると解ける", !caught.encircled && caught.senbei === 0,
+  `残り ${caught.senbei} 枚`);
 
 section("操作");
 // 指を離して別の場所に置き直しても、キャラがそこへ飛ばないこと

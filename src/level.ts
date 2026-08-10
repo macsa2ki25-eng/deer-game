@@ -168,24 +168,6 @@ export function spawnStall(s: State): void {
   });
 }
 
-/**
- * 関所。参道いっぱいにフンを敷き、回廊のところだけ穴を開ける。
- *
- * 回廊の外にだけ置くやり方は、裏を返すと「回廊の形がそのまま見える」。
- * ときどきこうして壁を作ると、画面は「壁と、その一箇所の穴」に見える。
- * 通れる道が一本なのは同じでも、帯としては読めなくなる。
- */
-function placeBarrier(s: State, yOffset: number): void {
-  const gapLo = s.corridor - s.corridorHalf - C.BARRIER_GAP_EXTRA;
-  const gapHi = s.corridor + s.corridorHalf + C.BARRIER_GAP_EXTRA;
-  for (let x = C.PATH.x0; x < C.PATH.x1 - C.PELLET.w; x += 4 + Math.random() * 3) {
-    if (x + C.PELLET.w > gapLo && x < gapHi) continue;
-    const dy = yOffset + (Math.random() - 0.5) * 5;
-    if (!clearOfCorridor(s, x, C.PELLET.w, dy)) continue;
-    s.poops.push(pellet(x, BASE_Y + dy, Math.random() < 0.08));
-  }
-}
-
 /** 道に寝そべって塞いでいる群れ。よけて通るしかない。 */
 function placeSleepers(s: State): void {
   const n = C.sleeperSize(s.dist);
@@ -214,11 +196,6 @@ export function spawnRow(s: State): void {
 
   if (Math.random() < C.treeRate(s.dist)) placeTree(s);
   if (Math.random() < C.sleeperRate(s.dist)) placeSleepers(s);
-
-  if (Math.random() < C.barrierRate(s.dist)) {
-    placeBarrier(s, 0);
-    return; // 関所の行にはふつうの塊を重ねない
-  }
 
   const rate = C.poopRate(s.dist);
   const n = Math.floor(rate) + (Math.random() < rate % 1 ? 1 : 0);

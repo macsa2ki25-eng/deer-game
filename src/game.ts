@@ -25,12 +25,9 @@ function banner(s: State, text: string, seconds: number): void {
 // ---------------------------------------------------------------- プレイヤー
 
 function movePlayer(s: State, input: InputState, dt: number): void {
-  // 群がられるほど動けない。囲まれる怖さの本体はここ。
-  const swarmSlow = Math.max(
-    C.SWARM_SLOW_FLOOR,
-    1 - s.swarmCount * C.SWARM_SLOW_PER_DEER,
-  );
-  const slowed = (s.slip > 0 ? C.SLIP_FACTOR : 1) * (s.stun > 0 ? 0 : 1) * swarmSlow;
+  // 囲まれているあいだは、鹿に押されてほとんど動けない。怖さの本体はここ。
+  const slowed = (s.slip > 0 ? C.SLIP_FACTOR : 1) * (s.stun > 0 ? 0 : 1)
+    * (s.encircled ? C.ENCIRCLE_SLOW : 1);
   const maxStep = C.LATERAL * slowed * dt;
 
   const kx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
@@ -110,38 +107,68 @@ function updatePooper(s: State, d: Deer, dt: number): void {
 }
 
 /**
- * せんべいを持っていると鹿が気づいて群がる。
+ * 鹿せんべい。ボタンは無い。**接触がそのまま給餌**。
  *
- * 群がった鹿はぶつかっても汚れない——押してくるだけ。
- * 危ないのは、動けず、鹿の体でフンが見えないまま参道に立たされること。
- * 牡鹿だけは餌に興味がないので、群れに加わらないし、当たれば普通に痛い。
+ *   持っている → 鹿にぶつかっても汚れず、1枚渡して鹿は去る（得点）
+ *   つまり持っているあいだだけ、避けゲーが「当てにいくゲーム」に反転する。
+ *
+ *   ただし群れ（ENCIRCLE_AT 頭以上の塊）に踏み込むと取り囲まれる。
+ *   囲まれると、せんべいが尽きるまで解けない。
+ *   一定間隔で1枚ずつ持っていかれるので、**拘束時間＝残り枚数**。
+ *   抱えたまま群れに突っ込むほど長く動けない。
+ *
+ * 「囲まれてただ待つ」にならないよう、拘束の長さは自分で決められるようにしてある。
+ * 単独の鹿にわざとぶつけて枚数を減らしてから進む、という手が打てる。
  */
-function updateSwarm(s: State, dt: number): void {
+function updateEncircle(s: State, dt: number): void {
+  s.grace = Math.max(0, s.grace - dt);
   const cx = s.px + C.PLAYER.w / 2;
   const cy = s.py + C.PLAYER.h / 2;
-  const holding = s.senbei > 0 && s.scatterFree <= 0;
-  let count = 0;
 
-  for (const d of s.deer) {
-    if (d.kind === "stag" || d.kind === "sleeper") continue;
+  const near = (d: Deer, r: number) => {
+    const dx = d.x + C.DEER_BOX.w / 2 - cx;
+    const dy = d.y + C.DEER_BOX.h / 2 - cy;
+    return dx * dx + dy * dy < r * r;
+  };
+  const canJoin = (d: Deer) => d.kind !== "stag" && d.kind !== "sleeper";
 
-    if (holding && !d.swarm) {
-      const dx = d.x + C.DEER_BOX.w / 2 - cx;
-      const dy = d.y + C.DEER_BOX.h / 2 - cy;
-      if (dx * dx + dy * dy < C.NOTICE_RADIUS * C.NOTICE_RADIUS) {
-        d.swarm = true;
-        d.host = null; // 餌やり中の観光客からも乗り換えてくる
-        d.sp = 0;
+  // 捕まる瞬間
+  if (!s.encircled && s.senbei > 0 && s.grace <= 0) {
+    let n = 0;
+    for (const d of s.deer) if (canJoin(d) && near(d, C.ENCIRCLE_RADIUS)) n++;
+    if (n >= C.ENCIRCLE_AT) {
+      s.encircled = true;
+      s.drainT = C.ENCIRCLE_DRAIN;
+      banner(s, "かこまれた！", 1.4);
+      sfx.snort();
+      // 近くにいた鹿を取り込む。さらに気づいた鹿も後から寄ってくる
+      for (const d of s.deer) {
+        if (canJoin(d) && near(d, C.NOTICE_RADIUS)) {
+          d.swarm = true;
+          d.host = null;
+          d.sp = 0;
+        }
       }
-    } else if (!holding && d.swarm) {
-      // 手ぶらになれば興味を失う。その場に取り残される
-      d.swarm = false;
+    }
+  }
+
+  if (!s.encircled) {
+    s.swarmCount = 0;
+    return;
+  }
+
+  // 囲まれているあいだ：まわりを回り、順番に1枚ずつ持っていく
+  let count = 0;
+  for (const d of s.deer) {
+    if (!canJoin(d)) continue;
+    if (!d.swarm && near(d, C.NOTICE_RADIUS)) {
+      d.swarm = true;
+      d.host = null;
       d.sp = 0;
     }
-
     if (!d.swarm) continue;
     count++;
-    d.orbit += dt * 1.5;
+    d.orbit += dt * 1.4;
     const tx = cx + Math.cos(d.orbit) * C.ORBIT_RADIUS - C.DEER_BOX.w / 2;
     const ty = cy + Math.sin(d.orbit) * C.ORBIT_RADIUS - C.DEER_BOX.h / 2;
     const vx = tx - d.x;
@@ -151,71 +178,40 @@ function updateSwarm(s: State, dt: number): void {
     d.x += (vx / len) * step;
     d.y += (vy / len) * step;
   }
-
   s.swarmCount = count;
 
-  // もみくちゃ。押されて、フンだらけの中で足踏みさせられる
-  if (count >= C.JOSTLE_AT) {
-    s.jostle += (count - C.JOSTLE_AT + 1) * C.JOSTLE_RATE * dt;
-    if (s.jostle >= 1) {
-      s.jostle -= 1;
-      hurt(s, 1, 0.35);
-    }
-  } else {
-    s.jostle = Math.max(0, s.jostle - dt * 0.3);
+  s.drainT -= dt;
+  if (s.drainT <= 0) {
+    s.drainT = C.ENCIRCLE_DRAIN;
+    takeSenbei(s, 0.5); // 囲まれて渡すぶんは点が安い。自分から当てにいくほうが得
   }
+
+  if (s.senbei <= 0) release(s);
 }
 
-/** 群れの一番近い鹿に1枚渡す。続けて渡すほど倍率が乗る。 */
-function feed(s: State, dt: number): void {
-  s.feedCooldown -= dt;
-  s.feedChainT -= dt;
-  if (s.feedChainT <= 0) s.feedChain = 1;
-  if (s.senbei <= 0 || s.feedCooldown > 0) return;
-
-  const cx = s.px + C.PLAYER.w / 2;
-  const cy = s.py + C.PLAYER.h / 2;
-  let best = -1;
-  let bestD = C.FEED_RADIUS * C.FEED_RADIUS;
-  for (let i = 0; i < s.deer.length; i++) {
-    const d = s.deer[i];
-    if (!d.swarm) continue;
-    const dx = d.x + C.DEER_BOX.w / 2 - cx;
-    const dy = d.y + C.DEER_BOX.h / 2 - cy;
-    const dist2 = dx * dx + dy * dy;
-    if (dist2 < bestD) {
-      bestD = dist2;
-      best = i;
-    }
-  }
-  if (best < 0) return;
-
-  s.deer.splice(best, 1);
+/** 1枚渡す。valueRatio で点の重みを変える。 */
+function takeSenbei(s: State, valueRatio: number): void {
+  if (s.senbei <= 0) return;
   s.senbei--;
   s.fed++;
-  s.feedCooldown = C.FEED_COOLDOWN;
   s.feedChain = Math.min(C.FEED_CHAIN_MAX, s.feedChain + C.FEED_CHAIN_STEP);
   s.feedChainT = C.FEED_CHAIN_WINDOW;
-  s.score += C.FEED_SCORE * s.mult * s.feedChain;
-  s.grazeGauge = Math.min(C.GRAZE_MAX, s.grazeGauge + C.FEED_GAUGE);
+  s.score += C.FEED_SCORE * s.mult * s.feedChain * valueRatio;
+  s.grazeGauge = Math.min(C.GRAZE_MAX, s.grazeGauge + C.FEED_GAUGE * valueRatio);
   sfx.feed();
-  if (s.senbei === 0) banner(s, "せんべい ぜんぶ あげた", 1.4);
 }
 
-/** 残りを地面に撒いて逃げる。点は捨てることになるが、囲みは解ける。 */
-export function scatterSenbei(s: State): void {
-  if (s.senbei <= 0) return;
-  s.baits.push({ x: s.px + C.PLAYER.w / 2 - 4, y: s.py + C.PLAYER.h - 2, life: 4 });
-  s.senbei = 0;
-  s.scatterFree = C.SCATTER_FREE_TIME;
+/** 囲みが解ける。鹿は興味を失って散る。 */
+function release(s: State): void {
+  s.encircled = false;
+  s.grace = C.ENCIRCLE_GRACE;
+  s.swarmCount = 0;
   for (const d of s.deer) {
     if (!d.swarm) continue;
     d.swarm = false;
-    d.sp = 0; // 撒いたところに残る
+    d.sp = C.deerSpeed(s.dist) * C.TILE;
   }
-  s.swarmCount = 0;
-  banner(s, "せんべいを まいた", 1.2);
-  sfx.pickup();
+  banner(s, "せんべいが なくなった", 1.3);
 }
 
 function moveEntities(s: State, vpx: number, dt: number): void {
@@ -344,6 +340,16 @@ function resolveDeer(s: State): boolean {
       d.x + C.DEER_BOX.hitX, d.y + C.DEER_BOX.hitY, C.DEER_BOX.hitW, C.DEER_BOX.hitH,
     )) continue;
 
+    // せんべいを持っていれば、ぶつかった鹿に1枚渡して事なきを得る。
+    // 牡鹿だけは餌に興味がないので、これが効かない。
+    if (s.senbei > 0 && d.kind !== "stag") {
+      if (d.kind !== "sleeper" && d.kind !== "scene") s.deer.splice(i, 1);
+      takeSenbei(s, 1);
+      s.inv = 0.25; // 同じ鹿に連続で渡さないための最小間隔
+      if (s.senbei <= 0 && s.encircled) release(s);
+      return false;
+    }
+
     const dirt = d.kind === "stag" ? C.STAG_DIRT : C.DIRT_DEER;
     if (d.kind !== "sleeper" && d.kind !== "scene") s.deer.splice(i, 1);
     s.stun = C.STUN_DEER;
@@ -366,9 +372,8 @@ function resolveStalls(s: State): void {
     if (dx > C.STALL_REACH_X || dy > C.STALL_REACH_Y) continue;
     st.taken = true;
     s.senbei = C.SENBEI_PER_STALL;
-    s.scatterFree = 0;
     sfx.pickup();
-    banner(s, `せんべい ×${C.SENBEI_PER_STALL}　鹿がくるぞ`, 1.8);
+    banner(s, `せんべい ×${C.SENBEI_PER_STALL}　鹿にぶつかってOK`, 1.8);
   }
 }
 
@@ -383,7 +388,6 @@ export function step(s: State, input: InputState, dt: number): void {
   s.dist = s.mode === "stage" ? C.stageDifficulty(s.stage) + s.progress : s.progress;
   s.scrollPx += vpx * dt;
   s.walkAcc += vpx * dt;
-  s.scatterFree = Math.max(0, s.scatterFree - dt);
 
   // レベル。数字と一言で「上がったこと」を必ず見せる
   s.bannerT -= dt;
@@ -438,8 +442,9 @@ export function step(s: State, input: InputState, dt: number): void {
   s.mult = 1 + s.grazeGauge;
 
   moveEntities(s, vpx, dt);
-  updateSwarm(s, dt);
-  if (s.phase !== "playing") return; // もみくちゃで終わった
+  updateEncircle(s, dt);
+  s.feedChainT -= dt;
+  if (s.feedChainT <= 0) s.feedChain = 1;
 
   // 予兆。牡鹿はためのあいだ狙いを合わせ続け、最後に固定する
   for (let i = s.warns.length - 1; i >= 0; i--) {
@@ -470,7 +475,6 @@ export function step(s: State, input: InputState, dt: number): void {
   }
 
   resolveStalls(s);
-  feed(s, dt);
   if (resolvePoops(s)) return;
   if (resolveDeer(s)) return;
 

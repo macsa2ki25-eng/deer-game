@@ -4,7 +4,7 @@ import * as C from "./config";
 import { createState, resetRun, type State } from "./state";
 import { attachInput, REACH } from "./input";
 import { buildBackground } from "./background";
-import { step, scatterSenbei } from "./game";
+import { step } from "./game";
 import { render } from "./render";
 import { unlock, setEnabled } from "./audio";
 import * as store from "./storage";
@@ -30,7 +30,6 @@ const el = {
   graze: $<HTMLSpanElement>("graze"),
   senbei: $<HTMLSpanElement>("senbei"),
   senbeiTile: $<HTMLDivElement>("senbei-tile"),
-  scatter: $<HTMLButtonElement>("scatter"),
   swarm: $<HTMLSpanElement>("swarm"),
   swarmTile: $<HTMLDivElement>("swarm-tile"),
   grazeTile: $<HTMLDivElement>("graze-tile"),
@@ -233,7 +232,6 @@ touristInput.addEventListener("change", () => {
   store.saveTourists(state.touristsOn);
 });
 pad.addEventListener("pointerdown", () => pad.classList.add("touched"));
-el.scatter.addEventListener("click", () => scatterSenbei(state));
 
 // ---------- リザルト ----------
 
@@ -326,11 +324,10 @@ function updateStats(): void {
   }
   el.senbei.textContent = String(state.senbei);
   el.senbeiTile.classList.toggle("has", state.senbei > 0);
-  el.scatter.hidden = state.senbei === 0 || state.phase !== "playing";
   el.swarm.textContent = String(state.swarmCount);
-  el.swarmTile.classList.toggle("bad", state.swarmCount >= C.JOSTLE_AT);
-  el.swarmTile.hidden = state.swarmCount === 0 && state.senbei === 0;
-  el.grazeTile.hidden = !el.swarmTile.hidden;
+  el.swarmTile.classList.toggle("bad", state.encircled);
+  el.swarmTile.hidden = !state.encircled;
+  el.grazeTile.hidden = state.encircled;
 
   if (state.mode === "stage") {
     el.scoreLabel.textContent = `スコア（${state.stage}面）`;
@@ -404,7 +401,7 @@ function frame(now: number): void {
 if (new URLSearchParams(location.search).has("debug")) {
   (window as Window & { __mtd?: unknown }).__mtd = {
     state, reach: REACH, config: C, stars,
-    startEndless, startStage, scatterSenbei, input,
+    startEndless, startStage, input,
   };
 }
 

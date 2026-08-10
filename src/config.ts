@@ -231,33 +231,37 @@ export const STALL_BOX = { w: 20, h: 14 } as const;
 export const STALL_REACH_X = 26;
 export const STALL_REACH_Y = 16;
 
-/** この距離に入った鹿は、せんべいに気づいて群れに加わる。 */
+/**
+ * 囲まれ判定。この半径にこの頭数がいる所へ踏み込むと、群れに取り囲まれる。
+ * 単独の鹿にぶつかるぶんには盾として機能するが、塊に触れると捕まる。
+ */
+export const ENCIRCLE_RADIUS = 46;
+export const ENCIRCLE_AT = 3;
+/** 囲まれているあいだ、この間隔で1枚ずつ持っていかれる。拘束時間＝残り枚数。 */
+export const ENCIRCLE_DRAIN = 0.5;
+/** 囲まれているあいだの移動速度。 */
+export const ENCIRCLE_SLOW = 0.3;
+/** 解放直後、すぐ捕まらない猶予[s]。 */
+export const ENCIRCLE_GRACE = 1.2;
+
+/** この距離に入った鹿は、せんべいに気づいて寄ってくる。 */
 export const NOTICE_RADIUS = 96;
 /** 群れの鹿がプレイヤーの周りを回る半径。 */
 export const ORBIT_RADIUS = 17;
 /** 群れの鹿の寄る速さ[px/s]。 */
 export const SWARM_SPEED = 130;
 
-/** 群れ1頭ごとに移動速度がこれだけ落ちる。囲まれるほど動けない。 */
-export const SWARM_SLOW_PER_DEER = 0.075;
-export const SWARM_SLOW_FLOOR = 0.25;
-/** これ以上たかられると「もみくちゃ」。押されて汚れていく。 */
-export const JOSTLE_AT = 7;
-/** もみくちゃ1頭あたり、1秒に増える汚れ。 */
-export const JOSTLE_RATE = 0.16;
-
-/** この距離まで近づいた群れの鹿に、自動で1枚渡す。 */
-export const FEED_RADIUS = 24;
-export const FEED_COOLDOWN = 0.28;
-export const FEED_SCORE = 220;
+/**
+ * 鹿にぶつかったとき、せんべいを持っていれば1枚渡して事なきを得る。
+ * ボタンも狙いも要らない——**接触がそのまま給餌**。
+ * 持っているあいだだけ、避けゲーが「当てにいくゲーム」に反転する。
+ */
+export const FEED_SCORE = 260;
 export const FEED_GAUGE = 0.18;
 /** 続けて渡すと倍率が乗る。あげる楽しさはここ。 */
-export const FEED_CHAIN_WINDOW = 1.6;
+export const FEED_CHAIN_WINDOW = 1.8;
 export const FEED_CHAIN_STEP = 0.25;
 export const FEED_CHAIN_MAX = 3.0;
-
-/** 撒いて逃げる。残り枚数ぶんの点は捨てることになる。 */
-export const SCATTER_FREE_TIME = 2.6;
 
 // ---- 鹿の群れ ----
 
@@ -293,9 +297,13 @@ export const SCENE_RADIUS = 19;
 // ---- 関所：道を塞ぐようにフンを敷く ----
 
 /**
- * 回廊を空けるだけだと「フンの無い綺麗な帯」が見えてしまう。
- * ときどき参道いっぱいにフンを敷き、回廊のところだけ穴を開ける。
- * こうすると画面は「壁と、その一箇所の穴」に見え、帯としては読めなくなる。
+ * 関所。参道いっぱいにフンを敷き、1〜2箇所だけ穴を開ける。
+ *
+ * 最初は「回廊のところに穴を開ける」実装にしていたが、それだと
+ * **関所が「安全な道はここです」という看板**になってしまい、逆効果だった。
+ * いまは順序が逆で、**先に穴の位置を決めて、回廊をそこへ寄せる**。
+ * 穴は「今の回廊」ではなく「これから回廊が向かう先」なので、
+ * 遠くの穴を見て前もって寄せておく、という操作を要求できる。
  */
 export const UNLOCK_BARRIER = 2;
 export function barrierRate(dist: number): number {
@@ -303,7 +311,9 @@ export function barrierRate(dist: number): number {
   return Math.min(0.045, 0.012 + levelOf(dist) * 0.004);
 }
 /** 関所の隙間は回廊よりすこし広く開ける。ぴったりだと通り抜けの余地が無い。 */
-export const BARRIER_GAP_EXTRA = 6;
+export const BARRIER_GAP_EXTRA = 8;
+/** 関所は何行ぶんの厚みで敷くか。薄いと壁に見えない。 */
+export const BARRIER_ROWS = 3;
 
 // ---- 木（通れない） ----
 
