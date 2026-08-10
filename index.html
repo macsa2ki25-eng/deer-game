@@ -155,6 +155,16 @@
     opacity:0;transition:opacity .18s ease;
   }
   #banner.show{opacity:1}
+  /* 囲まれたときの脱出口。せんべいを持っているあいだだけ、下段に出す。
+     ゲーム画面にはかぶせない——いちばん焦っているときに自分が隠れるのは最悪なので。 */
+  #scatter{
+    flex:none;width:100%;background:var(--graze);color:#11140e;
+    font-size:13px;padding:.5em 1em;letter-spacing:.08em;
+  }
+  #swarm-tile .value{color:var(--dirt)}
+  #swarm-tile.bad{border-color:var(--dirt);animation:pulse .5s ease-in-out infinite alternate}
+  @keyframes pulse{from{background:var(--tile)}to{background:#3a2018}}
+  @media (prefers-reduced-motion:reduce){ #swarm-tile.bad{animation:none} }
   /* せんべいを持っているあいだは目立たせる（鹿が寄ってくる危険な状態） */
   #senbei-tile.has{border-color:var(--graze)}
   #senbei-tile.has .value{color:var(--graze)}
@@ -203,11 +213,17 @@
           <span class="label">よごれ</span>
           <div id="dirt"></div>
         </div>
-        <div class="tile">
+        <div class="tile" id="graze-tile">
           <span class="label">グレイズ</span>
           <span class="value" id="graze">0</span>
         </div>
+        <div class="tile" id="swarm-tile" hidden>
+          <span class="label">たかられ</span>
+          <span class="value" id="swarm">0</span>
+        </div>
       </div>
+
+      <button id="scatter" type="button" hidden>せんべいを まく</button>
 
       <div id="pad">
         <span class="pad-edge top">おく</span>

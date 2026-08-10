@@ -10,7 +10,7 @@
  */
 
 import * as C from "./config";
-import type { State, DeerKind, Poop, Warn } from "./state";
+import type { State, DeerKind, Poop, Warn, Deer, Tourist } from "./state";
 
 /** 行の基準となる出現 y。 */
 const BASE_Y = C.ENTRY_Y + 12;
@@ -144,7 +144,9 @@ function placeTree(s: State): void {
   // 木は背が18pxあって1行を大きくまたぐ。その間に回廊も動くので、
   // 場所を選ぶ時点で「ずれぶんの余裕」まで含めて離しておかないと、
   // このあとの clearOfCorridor で必ず弾かれて一本も置けない（実際そうなっていた）。
-  const dy = C.TREE_BOX.h / 2;
+  // またいでいる行数ぶん、回廊は横に動く。半分ではなく「高さぜんぶ」で見積もる。
+  // 半分にしていたら、押し出しで回廊の外へ突き飛ばされて回廊が意味を失った。
+  const dy = C.TREE_BOX.h;
   const slack = (dy / C.TILE) * C.corridorDrift(s.dist);
   const cx = freeCentre(s, C.TREE_BOX.w / 2 + slack + 2);
   if (cx === null) return;
@@ -166,6 +168,44 @@ export function spawnStall(s: State): void {
   });
 }
 
+/**
+ * 関所。参道いっぱいにフンを敷き、回廊のところだけ穴を開ける。
+ *
+ * 回廊の外にだけ置くやり方は、裏を返すと「回廊の形がそのまま見える」。
+ * ときどきこうして壁を作ると、画面は「壁と、その一箇所の穴」に見える。
+ * 通れる道が一本なのは同じでも、帯としては読めなくなる。
+ */
+function placeBarrier(s: State, yOffset: number): void {
+  const gapLo = s.corridor - s.corridorHalf - C.BARRIER_GAP_EXTRA;
+  const gapHi = s.corridor + s.corridorHalf + C.BARRIER_GAP_EXTRA;
+  for (let x = C.PATH.x0; x < C.PATH.x1 - C.PELLET.w; x += 4 + Math.random() * 3) {
+    if (x + C.PELLET.w > gapLo && x < gapHi) continue;
+    const dy = yOffset + (Math.random() - 0.5) * 5;
+    if (!clearOfCorridor(s, x, C.PELLET.w, dy)) continue;
+    s.poops.push(pellet(x, BASE_Y + dy, Math.random() < 0.08));
+  }
+}
+
+/** 道に寝そべって塞いでいる群れ。よけて通るしかない。 */
+function placeSleepers(s: State): void {
+  const n = C.sleeperSize(s.dist);
+  const spread = 8 + n * 4;
+  const slack = ((C.DEER_BOX.h + 20) / C.TILE) * C.corridorDrift(s.dist);
+  const cx = freeCentre(s, spread / 2 + C.DEER_BOX.w / 2 + slack + 4);
+  if (cx === null) return;
+  for (let i = 0; i < n; i++) {
+    const x = cx + (Math.random() - 0.5) * spread - C.DEER_BOX.w / 2;
+    const jitter = (Math.random() - 0.5) * 16;
+    const y = C.ENTRY_Y + jitter;
+    if (x < C.PATH.x0 || x > C.PATH.x1 - C.DEER_BOX.w) continue;
+    // clearOfCorridor は「行の基準 y からのずれ」を要る。
+    // ENTRY_Y は BASE_Y より12px上なので、そのぶんも足さないと見積もりが甘くなる。
+    // さらに鹿は縦18pxあるので、体の高さも足しておく。
+    if (!clearOfCorridor(s, x, C.DEER_BOX.w, y - BASE_Y - C.DEER_BOX.h)) continue;
+    s.deer.push(newDeer(x, y, "sleeper", 0, 0));
+  }
+}
+
 /** 1行(16px)ぶん。塊をいくつ置くかを距離から決める。 */
 export function spawnRow(s: State): void {
   advanceCorridor(s);
@@ -173,6 +213,12 @@ export function spawnRow(s: State): void {
   if (C.inRest(s.dist)) return;
 
   if (Math.random() < C.treeRate(s.dist)) placeTree(s);
+  if (Math.random() < C.sleeperRate(s.dist)) placeSleepers(s);
+
+  if (Math.random() < C.barrierRate(s.dist)) {
+    placeBarrier(s, 0);
+    return; // 関所の行にはふつうの塊を重ねない
+  }
 
   const rate = C.poopRate(s.dist);
   const n = Math.floor(rate) + (Math.random() < rate % 1 ? 1 : 0);
@@ -196,6 +242,43 @@ export function dropFromDeer(s: State, d: { x: number; y: number }): void {
       false,
     ),
   );
+}
+
+/** 鹿を1頭つくる。増えたフィールドをここ一箇所で埋める。 */
+export function newDeer(x: number, y: number, kind: DeerKind, sp: number, vx: number): Deer {
+  return {
+    x, y, kind, sp, vx,
+    squat: 0,
+    dropIn: 0,
+    dropsLeft: kind === "pooper" ? C.POOPER_PELLETS : 0,
+    swarm: false,
+    orbit: Math.random() * Math.PI * 2,
+    lockX: x,
+    host: null,
+  };
+}
+
+/**
+ * せんべいを持った観光客と、それに群がる鹿。まるごとひとつの障害物。
+ * 実際の奈良でいちばんよく見る光景で、しかも近づけば自分にも寄ってくる。
+ */
+export function spawnFeedingScene(s: State): void {
+  const n = C.sceneDeer(s.dist);
+  const cx = freeCentre(s, C.SCENE_RADIUS + C.DEER_BOX.w / 2 + 4);
+  if (cx === null) return;
+  const host: Tourist = { x: cx - 6, y: C.ENTRY_Y - 6, feeding: true };
+  s.tourists.push(host);
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
+    const d = newDeer(
+      host.x + Math.cos(a) * C.SCENE_RADIUS,
+      host.y + Math.sin(a) * C.SCENE_RADIUS,
+      "scene", 0, 0,
+    );
+    d.orbit = a;
+    d.host = host;
+    s.deer.push(d);
+  }
 }
 
 /** 次に出す鹿の種類を距離から抽選する。 */
@@ -228,50 +311,45 @@ export function scheduleDeer(s: State): void {
       t: C.TELEGRAPH,
       x: 0,
       y: C.PLAY_Y.top + Math.random() * (C.PLAY_Y.bottom - C.PLAY_Y.top),
+      herd: 1,
     });
   } else {
     const kind = pickKind(s.dist);
+    // 群れで歩いてくる。牡鹿だけは単独（縄張り争いの最中なので）
+    const herd = kind !== "stag" && Math.random() < C.herdShare(s.dist) ? C.herdSize(s.dist) : 1;
     s.warns.push({
       edge: "top",
       kind,
       t: C.TELEGRAPH + (kind === "stag" ? C.STAG_WINDUP : 0),
       x: C.PATH.x0 + 2 + Math.random() * (C.PATH_W - C.DEER_BOX.w - 4),
       y: 0,
+      herd,
     });
   }
 
   s.deerTimer = C.deerInterval(s.dist) * (0.75 + Math.random() * 0.5);
 }
 
-/** 予兆が切れたので実体を出す。 */
-export function hatchDeer(s: State, w: Warn): void {
+/** 予兆が切れたので実体を出す。群れならまとめて出す。 */
+export function hatchDeer(s: State, w: Warn, playerX: number): void {
   const speed = C.deerSpeed(s.dist) * C.TILE;
 
-  if (w.edge === "top") {
-    s.deer.push({
-      x: w.x,
-      y: C.ENTRY_Y,
-      kind: w.kind,
-      sp: speed * (w.kind === "stag" ? 2.1 : 1),
-      vx: 0,
-      squat: 0,
-      dropIn: 0,
-      // ここを 0 のまま作っていたので、種類だけ pooper で中身はただ歩く鹿だった。
-      // 落とす粒を持たせないと立ち止まる条件が一生成立しない。
-      dropsLeft: w.kind === "pooper" ? C.POOPER_PELLETS : 0,
-    });
+  if (w.edge !== "top") {
+    const dir = w.edge === "left" ? 1 : -1;
+    s.deer.push(newDeer(
+      dir > 0 ? -C.DEER_BOX.w : C.VIEW.w + 2, w.y, "side", 0, dir * speed * 0.9,
+    ));
     return;
   }
 
-  const dir = w.edge === "left" ? 1 : -1;
-  s.deer.push({
-    x: dir > 0 ? -C.DEER_BOX.w : C.VIEW.w + 2,
-    y: w.y,
-    kind: "side",
-    sp: 0,
-    vx: dir * speed * 0.9,
-    squat: 0,
-    dropIn: 0,
-    dropsLeft: 0,
-  });
+  for (let i = 0; i < w.herd; i++) {
+    // 群れは横にずれて、少し前後する
+    const off = w.herd === 1 ? 0 : (i - (w.herd - 1) / 2) * (C.DEER_BOX.w + 3);
+    const x = Math.max(C.PATH.x0, Math.min(C.PATH.x1 - C.DEER_BOX.w, w.x + off));
+    const y = C.ENTRY_Y - Math.abs(off) * 0.35 - Math.random() * 6;
+    const d = newDeer(x, y, w.kind, speed * (w.kind === "stag" ? C.STAG_SPEED : 1), 0);
+    // 牡鹿はここで狙いを固定する。あとは直進なので「いま居る場所から退く」ゲームになる
+    if (w.kind === "stag") d.lockX = playerX - (C.DEER_BOX.w - C.PLAYER.w) / 2;
+    s.deer.push(d);
+  }
 }

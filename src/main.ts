@@ -4,7 +4,7 @@ import * as C from "./config";
 import { createState, resetRun, type State } from "./state";
 import { attachInput, REACH } from "./input";
 import { buildBackground } from "./background";
-import { step } from "./game";
+import { step, scatterSenbei } from "./game";
 import { render } from "./render";
 import { unlock, setEnabled } from "./audio";
 import * as store from "./storage";
@@ -30,6 +30,10 @@ const el = {
   graze: $<HTMLSpanElement>("graze"),
   senbei: $<HTMLSpanElement>("senbei"),
   senbeiTile: $<HTMLDivElement>("senbei-tile"),
+  scatter: $<HTMLButtonElement>("scatter"),
+  swarm: $<HTMLSpanElement>("swarm"),
+  swarmTile: $<HTMLDivElement>("swarm-tile"),
+  grazeTile: $<HTMLDivElement>("graze-tile"),
   banner: $<HTMLDivElement>("banner"),
   gauge: $<HTMLElement>("gauge"),
   dirt: $<HTMLDivElement>("dirt"),
@@ -67,7 +71,10 @@ for (let i = 0; i < C.DIRT_MAX; i++) {
   dirtBlocks.push(b);
 }
 
-const input = attachInput(pad, { onFirstInput: unlock });
+const input = attachInput(pad, {
+  onFirstInput: unlock,
+  playerPos: () => ({ x: state.px, y: state.py }),
+});
 
 /**
  * ゲーム画面は横幅いっぱいに広げる（左右に余白を作らない）。
@@ -226,6 +233,7 @@ touristInput.addEventListener("change", () => {
   store.saveTourists(state.touristsOn);
 });
 pad.addEventListener("pointerdown", () => pad.classList.add("touched"));
+el.scatter.addEventListener("click", () => scatterSenbei(state));
 
 // ---------- リザルト ----------
 
@@ -318,6 +326,11 @@ function updateStats(): void {
   }
   el.senbei.textContent = String(state.senbei);
   el.senbeiTile.classList.toggle("has", state.senbei > 0);
+  el.scatter.hidden = state.senbei === 0 || state.phase !== "playing";
+  el.swarm.textContent = String(state.swarmCount);
+  el.swarmTile.classList.toggle("bad", state.swarmCount >= C.JOSTLE_AT);
+  el.swarmTile.hidden = state.swarmCount === 0 && state.senbei === 0;
+  el.grazeTile.hidden = !el.swarmTile.hidden;
 
   if (state.mode === "stage") {
     el.scoreLabel.textContent = `スコア（${state.stage}面）`;
@@ -391,7 +404,7 @@ function frame(now: number): void {
 if (new URLSearchParams(location.search).has("debug")) {
   (window as Window & { __mtd?: unknown }).__mtd = {
     state, reach: REACH, config: C, stars,
-    startEndless, startStage,
+    startEndless, startStage, scatterSenbei, input,
   };
 }
 

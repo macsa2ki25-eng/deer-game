@@ -29,8 +29,19 @@ export const ENTRY_Y = -18;
 
 /** 予兆の長さ[s]。これが無いと後半は理不尽になる。 */
 export const TELEGRAPH = 0.5;
-/** 牡鹿はさらにこれだけ「ため」てから突進する。 */
+/**
+ * 牡鹿。ためてから、ためが切れた瞬間のプレイヤーの位置へ一直線に突っ込む。
+ *
+ * 役割は他の鹿とはっきり分けてある。
+ *   歩き鹿  … 出た場所を通るだけ。位置を見て避ける
+ *   追い鹿  … こちらを追い続ける。振り切る
+ *   牡鹿    … 一度だけ狙いを定め、あとは直進。「いま居る場所から退く」
+ * そして牡鹿だけは**せんべいで買収できない**。発情期なので餌に興味がない。
+ * せんべいで場を支配できるこのゲームで、唯一お金で解決できない相手。
+ */
 export const STAG_WINDUP = 0.8;
+export const STAG_SPEED = 2.6;
+export const STAG_DIRT = 3;
 
 /**
  * 反応時間の下限[s]。設計の要。
@@ -77,7 +88,7 @@ export function poopRate(dist: number): number {
 
 /** 鹿の出現間隔 [s] */
 export function deerInterval(dist: number): number {
-  return Math.max(0.55, 3.2 * Math.exp(-dist / 800));
+  return Math.max(0.32, 1.7 * Math.exp(-dist / 900));
 }
 
 /** 追い鹿の割合 */
@@ -198,30 +209,110 @@ export const PEBBLE_IN_CORRIDOR = 0.6;
 
 // ---- 鹿せんべい ----
 
-/** 売り場を1つ通ると手に入る枚数。 */
-export const SENBEI_PER_STALL = 5;
-/** 売り場の出る間隔[s]。頻繁だとありがたみが無い。 */
-export const STALL_INTERVAL_MIN = 22;
-export const STALL_INTERVAL_MAX = 38;
-export const STALL_BOX = { w: 20, h: 14, hitX: 2, hitY: 2, hitW: 16, hitH: 10 } as const;
+/**
+ * 鹿せんべい。実際の奈良で起きることを、そのまま仕組みにしてある。
+ *
+ *   買う → 鹿が気づいて寄ってくる → あげると嬉しい → でも寄りすぎて囲まれる
+ *   → 動けない・前が見えない → 撒いて逃げるか、配り切るか
+ *
+ * 群がった鹿は「ぶつかって汚れる」対象ではない。押してくるだけ。
+ * 危ないのは、動けず前も見えないまま、フンだらけの参道に立たされること。
+ */
 
-/** せんべいを持っているあいだ、鹿はこの倍率で寄ってくる。 */
-export const SENBEI_RUSH_SPEED = 1.7;
-export const SENBEI_RUSH_HOMING = 110;
-/** この距離まで近づけば、ぶつかる前にせんべいを渡せる。 */
-export const FEED_RADIUS = 22;
-export const FEED_SCORE = 400;
-/** 渡すとゲージも少し上がる。 */
-export const FEED_GAUGE = 0.25;
+/** 売り場を1つ通ると手に入る枚数。実物と同じ10枚束。 */
+export const SENBEI_PER_STALL = 10;
+export const STALL_INTERVAL_MIN = 20;
+export const STALL_INTERVAL_MAX = 34;
+export const STALL_BOX = { w: 20, h: 14 } as const;
+/**
+ * 売り場は「前を通れば買える」。判定を絵よりずっと広く取る。
+ * ぴったり踏まないと買えないと、買うこと自体が別のミニゲームになってしまう。
+ */
+export const STALL_REACH_X = 26;
+export const STALL_REACH_Y = 16;
+
+/** この距離に入った鹿は、せんべいに気づいて群れに加わる。 */
+export const NOTICE_RADIUS = 96;
+/** 群れの鹿がプレイヤーの周りを回る半径。 */
+export const ORBIT_RADIUS = 17;
+/** 群れの鹿の寄る速さ[px/s]。 */
+export const SWARM_SPEED = 130;
+
+/** 群れ1頭ごとに移動速度がこれだけ落ちる。囲まれるほど動けない。 */
+export const SWARM_SLOW_PER_DEER = 0.075;
+export const SWARM_SLOW_FLOOR = 0.25;
+/** これ以上たかられると「もみくちゃ」。押されて汚れていく。 */
+export const JOSTLE_AT = 7;
+/** もみくちゃ1頭あたり、1秒に増える汚れ。 */
+export const JOSTLE_RATE = 0.16;
+
+/** この距離まで近づいた群れの鹿に、自動で1枚渡す。 */
+export const FEED_RADIUS = 24;
+export const FEED_COOLDOWN = 0.28;
+export const FEED_SCORE = 220;
+export const FEED_GAUGE = 0.18;
+/** 続けて渡すと倍率が乗る。あげる楽しさはここ。 */
+export const FEED_CHAIN_WINDOW = 1.6;
+export const FEED_CHAIN_STEP = 0.25;
+export const FEED_CHAIN_MAX = 3.0;
+
+/** 撒いて逃げる。残り枚数ぶんの点は捨てることになる。 */
+export const SCATTER_FREE_TIME = 2.6;
+
+// ---- 鹿の群れ ----
+
+/** 一緒に歩いてくる群れの頭数。レベルで増える。 */
+export function herdSize(dist: number): number {
+  return 2 + Math.min(4, Math.floor(levelOf(dist) / 2));
+}
+/** 出る鹿のうち、群れである割合。 */
+export function herdShare(dist: number): number {
+  return levelOf(dist) < 2 ? 0 : Math.min(0.4, 0.12 + levelOf(dist) * 0.03);
+}
+
+/** 道に寝そべって塞いでいる群れ。数もレベルで増える。 */
+export const UNLOCK_SLEEPERS = 3;
+export function sleeperRate(dist: number): number {
+  if (levelOf(dist) < UNLOCK_SLEEPERS) return 0;
+  return Math.min(0.09, 0.02 + levelOf(dist) * 0.006);
+}
+export function sleeperSize(dist: number): number {
+  return 3 + Math.min(5, Math.floor(levelOf(dist) / 2));
+}
+
+/** せんべいを持った観光客と、それに群がる鹿。まるごと障害物。 */
+export const UNLOCK_FEEDING_SCENE = 4;
+export const FEEDING_SCENE_INTERVAL_MIN = 9;
+export const FEEDING_SCENE_INTERVAL_MAX = 17;
+export function sceneDeer(dist: number): number {
+  return 5 + Math.min(4, Math.floor(levelOf(dist) / 2));
+}
+/** 餌やり場の鹿が観光客のまわりを回る半径。 */
+export const SCENE_RADIUS = 19;
+
+// ---- 関所：道を塞ぐようにフンを敷く ----
+
+/**
+ * 回廊を空けるだけだと「フンの無い綺麗な帯」が見えてしまう。
+ * ときどき参道いっぱいにフンを敷き、回廊のところだけ穴を開ける。
+ * こうすると画面は「壁と、その一箇所の穴」に見え、帯としては読めなくなる。
+ */
+export const UNLOCK_BARRIER = 2;
+export function barrierRate(dist: number): number {
+  if (levelOf(dist) < UNLOCK_BARRIER) return 0;
+  return Math.min(0.045, 0.012 + levelOf(dist) * 0.004);
+}
+/** 関所の隙間は回廊よりすこし広く開ける。ぴったりだと通り抜けの余地が無い。 */
+export const BARRIER_GAP_EXTRA = 6;
 
 // ---- 木（通れない） ----
 
-export const TREE_BOX = { w: 16, h: 18, hitX: 3, hitY: 4, hitW: 10, hitH: 11 } as const;
+export const TREE_BOX = { w: 26, h: 30, hitX: 4, hitY: 7, hitW: 18, hitH: 18 } as const;
 
 /** 1行あたりに木を置く確率。 */
 export function treeRate(dist: number): number {
   if (levelOf(dist) < UNLOCK.tree) return 0;
-  return Math.min(0.15, 0.05 + (dist - (UNLOCK.tree - 1) * LEVEL_M) / 12000);
+  return Math.min(0.42, 0.14 + (dist - (UNLOCK.tree - 1) * LEVEL_M) / 3000);
 }
 
 // ---- 休憩区間 ----

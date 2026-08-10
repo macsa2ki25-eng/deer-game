@@ -28,17 +28,32 @@ export function render(ctx: CanvasRenderingContext2D, s: State, bg: HTMLCanvasEl
     ctx.drawImage(SPR.tree, Math.round(t.x), Math.round(t.y));
   }
 
+  for (const b of s.baits) {
+    ctx.drawImage(SPR.bait, Math.round(b.x), Math.round(b.y));
+  }
+
   for (const t of s.tourists) {
     ctx.drawImage(SPR.tourist, Math.round(t.x), Math.round(t.y));
   }
 
   for (const d of s.deer) {
+    const x = Math.round(d.x);
+    const y = Math.round(d.y);
+    if (d.kind === "sleeper") {
+      ctx.drawImage(SPR.deerSleep, x, y + 4);
+      continue;
+    }
     if (d.squat > 0) {
-      ctx.drawImage(SPR.deerSquat, Math.round(d.x), Math.round(d.y));
+      ctx.drawImage(SPR.deerSquat, x, y);
+      continue;
+    }
+    if (d.kind === "stag") {
+      // 角のぶん上に伸びているので、体の位置を合わせて描く
+      ctx.drawImage(SPR.deerStag, x, y - 4);
       continue;
     }
     const frame = Math.floor((s.walkAcc + d.y * 2) / 7) % 2;
-    ctx.drawImage(SPR.deer[frame], Math.round(d.x), Math.round(d.y));
+    ctx.drawImage(SPR.deer[frame], x, y);
   }
 
   // 無敵中は点滅させる

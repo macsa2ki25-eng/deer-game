@@ -1,33 +1,44 @@
 import * as C from "./config";
 
-export type DeerKind = "walk" | "homing" | "stag" | "side" | "pooper";
+export type DeerKind = "walk" | "homing" | "stag" | "side" | "pooper" | "sleeper" | "scene";
 export type Edge = "top" | "left" | "right";
 export type Mode = "endless" | "stage";
 export type Phase = "menu" | "playing" | "over" | "clear";
+
+export interface Tourist {
+  x: number;
+  y: number;
+  /** せんべいを持っていて、鹿に囲まれている観光客か。 */
+  feeding: boolean;
+}
 
 export interface Deer {
   x: number;
   y: number;
   kind: DeerKind;
-  /** 縦の相対速度[px/s]。横入り鹿と、立ち止まっている鹿は0。 */
+  /** 縦の相対速度[px/s]。横入り・寝ている鹿・群れは0。 */
   sp: number;
   /** 横速度[px/s]。 */
   vx: number;
-  /** 立ち止まってフンをしている残り時間[s]。0より大きいあいだは止まる。 */
+  /** 立ち止まってフンをしている残り時間[s]。 */
   squat: number;
-  /** 次の粒を落とすまで[s]。 */
   dropIn: number;
-  /** あと何粒落とすか。 */
   dropsLeft: number;
+  /** せんべいに気づいてこちらに群がっているか。 */
+  swarm: boolean;
+  /** 群がっているとき、まわりを回る角度。 */
+  orbit: number;
+  /** 牡鹿がための終わりに定めた狙いの x。 */
+  lockX: number;
+  /** 餌やり場の主。いるならその周りを回る。 */
+  host: Tourist | null;
 }
 
 export interface Poop {
   x: number;
   y: number;
-  /** 大きいのは当たり判定も広いが、かすめたときの見返りも大きい。 */
   big: boolean;
   variant: number;
-  /** 一度かすめた粒は二度と点にならない。 */
   grazed: boolean;
 }
 
@@ -38,22 +49,24 @@ export interface Pebble {
   variant: number;
 }
 
-export interface Tourist {
-  x: number;
-  y: number;
-}
-
-/** 鹿せんべい売り場。通ると5枚もらえる。 */
+/** 鹿せんべい売り場。通ると10枚もらえる。 */
 export interface Stall {
   x: number;
   y: number;
   taken: boolean;
 }
 
-/** 木。通れない。道を狭める役。 */
+/** 木。通れない。 */
 export interface Tree {
   x: number;
   y: number;
+}
+
+/** 撒かれたせんべい。鹿がここへ殺到する。 */
+export interface Bait {
+  x: number;
+  y: number;
+  life: number;
 }
 
 export interface Warn {
@@ -62,19 +75,17 @@ export interface Warn {
   t: number;
   x: number;
   y: number;
+  /** 群れで出るときの頭数。1なら単独。 */
+  herd: number;
 }
 
 export interface State {
   phase: Phase;
   mode: Mode;
-  /** ステージモードでの番号（1〜100）。 */
   stage: number;
 
-  /** 難易度を決める距離[m]。ステージモードでは stageDifficulty + progress。 */
   dist: number;
-  /** そのプレイで実際に進んだ距離[m]。表示とクリア判定に使う。 */
   progress: number;
-  /** ステージのゴール距離[m]。エンドレスでは 0。 */
   goal: number;
 
   score: number;
@@ -85,13 +96,22 @@ export interface State {
   grazeGauge: number;
   mult: number;
 
-  /** 手持ちの鹿せんべい。持っていると鹿が寄ってくる。 */
+  /** 手持ちの鹿せんべい。 */
   senbei: number;
-  /** 渡した枚数（表示用）。 */
+  /** 渡した枚数。 */
   fed: number;
-  /** いまのレベル。エンドレスの進み具合を数字で見せる。 */
+  /** いま群がっている頭数。多いほど動けない。 */
+  swarmCount: number;
+  /** 連続で渡したときの倍率と、その残り時間。 */
+  feedChain: number;
+  feedChainT: number;
+  feedCooldown: number;
+  /** もみくちゃで溜まる汚れの端数。 */
+  jostle: number;
+  /** 撒いた直後、鹿が寄ってこない時間。 */
+  scatterFree: number;
+
   level: number;
-  /** 画面に出す一言と残り時間[s]。 */
   banner: string;
   bannerT: number;
 
@@ -109,18 +129,19 @@ export interface State {
 
   corridor: number;
   corridorDir: number;
-  /** 回廊の半幅。行ごとに揺らして「フンの無い帯」を見えにくくする。 */
   corridorHalf: number;
 
   deerTimer: number;
   touristTimer: number;
   stallTimer: number;
+  sceneTimer: number;
   restShown: number;
 
   poops: Poop[];
   pebbles: Pebble[];
   stalls: Stall[];
   trees: Tree[];
+  baits: Bait[];
   deer: Deer[];
   tourists: Tourist[];
   warns: Warn[];
@@ -146,6 +167,17 @@ export function resetRun(s: State): void {
   s.deerHits = 0;
   s.grazeGauge = 0;
   s.mult = 1;
+  s.senbei = 0;
+  s.fed = 0;
+  s.swarmCount = 0;
+  s.feedChain = 1;
+  s.feedChainT = 0;
+  s.feedCooldown = 0;
+  s.jostle = 0;
+  s.scatterFree = 0;
+  s.level = C.levelOf(s.dist);
+  s.banner = "";
+  s.bannerT = 0;
   s.px = (C.PATH.x0 + C.PATH.x1) / 2 - C.PLAYER.w / 2;
   s.py = C.PLAY_Y.bottom - 24;
   s.inv = 0;
@@ -158,19 +190,16 @@ export function resetRun(s: State): void {
   s.corridor = (C.PATH.x0 + C.PATH.x1) / 2;
   s.corridorDir = Math.random() < 0.5 ? -1 : 1;
   s.corridorHalf = (C.CORRIDOR_HALF_MIN + C.CORRIDOR_HALF_MAX) / 2;
-  s.deerTimer = 1.6;
+  s.deerTimer = 1.2;
   s.touristTimer = 3;
   s.stallTimer = C.STALL_INTERVAL_MIN;
+  s.sceneTimer = C.FEEDING_SCENE_INTERVAL_MIN;
   s.restShown = 0;
-  s.senbei = 0;
-  s.fed = 0;
-  s.level = C.levelOf(s.dist);
-  s.banner = "";
-  s.bannerT = 0;
   s.poops = [];
   s.pebbles = [];
   s.stalls = [];
   s.trees = [];
+  s.baits = [];
   s.deer = [];
   s.tourists = [];
   s.warns = [];

@@ -82,8 +82,16 @@ function makeCorridorTracker() {
 async function drive(page, pad, reach, seconds, steer, opts = {}) {
   const track = makeCorridorTracker();
   const mults = [];
-  const seen = { squat: 0, trees: 0, stalls: 0, maxSenbei: 0, fed: 0, banners: new Set() };
-  await page.mouse.move(pad.x + pad.width / 2, pad.y + pad.height * 0.82);
+  const seen = {
+    squat: 0, trees: 0, stalls: 0, maxSenbei: 0, fed: 0, banners: new Set(),
+    sleepers: 0, scene: 0, herd: 0, maxSwarm: 0, baits: 0,
+  };
+  // 操作は相対方式なので、目標の絶対位置ではなく「動かしたい差分」でマウスを動かす。
+  // パッドの端に来たら、人と同じように指を離して真ん中に置き直す。
+  const kx = (reach.x1 - reach.x0) / pad.width;
+  let mouseX = pad.x + pad.width / 2;
+  const mouseY = pad.y + pad.height * 0.82;
+  await page.mouse.move(mouseX, mouseY);
   await page.mouse.down();
   const t0 = Date.now();
   let shot = false;
@@ -108,8 +116,12 @@ async function drive(page, pad, reach, seconds, steer, opts = {}) {
         graze: s.grazeCount, mult: s.mult, poopHits: s.poopHits, deerHits: s.deerHits,
         corridor: s.corridor, corridorHalf: s.corridorHalf, scrollPx: s.scrollPx,
         px: s.px, py: s.py, senbei: s.senbei, fed: s.fed,
-        trees: s.trees.length, stalls: s.stalls.length,
+        trees: s.trees.length, stalls: s.stalls.length, baits: s.baits.length,
+        swarmCount: s.swarmCount,
         squats: s.deer.filter((d) => d.squat > 0).length,
+        sleepers: s.deer.filter((d) => d.kind === "sleeper").length,
+        scene: s.deer.filter((d) => d.kind === "scene").length,
+        walkers: s.deer.filter((d) => d.kind === "walk" || d.kind === "homing").length,
         banner: s.bannerT > 0 ? s.banner : "",
       };
     });
@@ -118,6 +130,11 @@ async function drive(page, pad, reach, seconds, steer, opts = {}) {
     mults.push(s.mult);
     if (s.squats > 0) seen.squat++;
     seen.trees = Math.max(seen.trees, s.trees);
+    seen.sleepers = Math.max(seen.sleepers, s.sleepers);
+    seen.scene = Math.max(seen.scene, s.scene);
+    seen.herd = Math.max(seen.herd, s.walkers);
+    seen.maxSwarm = Math.max(seen.maxSwarm, s.swarmCount);
+    seen.baits = Math.max(seen.baits, s.baits);
     seen.stalls = Math.max(seen.stalls, s.stalls);
     seen.maxSenbei = Math.max(seen.maxSenbei, s.senbei);
     seen.fed = Math.max(seen.fed, s.fed);
@@ -125,8 +142,17 @@ async function drive(page, pad, reach, seconds, steer, opts = {}) {
 
     const lag = track(s);
     const targetX = steer(s, lag, (Date.now() - t0) / 1000);
-    const u = Math.min(1, Math.max(0, (targetX - reach.x0) / (reach.x1 - reach.x0)));
-    await page.mouse.move(pad.x + pad.width * u, pad.y + pad.height * 0.82);
+    const tx = await page.evaluate(() => window.__mtd.input.tx);
+    mouseX += (targetX - (tx ?? s.px)) / kx;
+    if (mouseX < pad.x + 6 || mouseX > pad.x + pad.width - 6) {
+      // 端まで来た。指を離して真ん中から続ける（相対方式なのでキャラは動かない）
+      await page.mouse.up();
+      mouseX = pad.x + pad.width / 2;
+      await page.mouse.move(mouseX, mouseY);
+      await page.mouse.down();
+    } else {
+      await page.mouse.move(mouseX, mouseY);
+    }
     if (SHOTS && opts.shotName && !shot && Date.now() - t0 > 6000) {
       shot = true;
       await page.locator("#stage").screenshot({ path: `${SHOTS}/${opts.shotName}.png` });
@@ -225,10 +251,53 @@ check("鹿が道でフンをする", pooper.squat > 0, `しゃがんだフレー
 const trees = await probe(16, 460);
 check("木が出て道が狭まる", trees.trees > 0, `同時に最大 ${trees.trees} 本`);
 
-const senbei = await probe(18, 600, () => { window.__mtd.state.stallTimer = 0.1; });
-check("鹿せんべい売り場が出る", senbei.stalls > 0);
-check("通ると5枚もらえる", senbei.maxSenbei === 5, `最大 ${senbei.maxSenbei} 枚`);
-check("寄ってきた鹿に渡せる", senbei.fed > 0, `${senbei.fed} 頭に給餌`);
+const crowded = await probe(20, 520);
+check("鹿が群れで歩いてくる", crowded.herd >= 3, `同時に最大 ${crowded.herd} 頭`);
+check("寝ている群れが道を塞ぐ", crowded.sleepers > 0, `最大 ${crowded.sleepers} 頭`);
+check("せんべいを持った観光客に鹿がたかる", crowded.scene >= 4, `最大 ${crowded.scene} 頭`);
+
+section("鹿せんべい");
+const senbei = await probe(20, 600, () => { window.__mtd.state.stallTimer = 0.1; });
+check("売り場が出る", senbei.stalls > 0);
+check("通ると10枚もらえる", senbei.maxSenbei === 10, `最大 ${senbei.maxSenbei} 枚`);
+check("持つと鹿に囲まれる", senbei.maxSwarm >= 3, `最大 ${senbei.maxSwarm} 頭にたかられた`);
+check("渡せる", senbei.fed > 0, `${senbei.fed} 頭に給餌`);
+
+// 撒いて逃げられるか
+await page.evaluate(() => window.__mtd.startEndless());
+await page.waitForTimeout(140);
+const escaped = await page.evaluate(async () => {
+  const s = window.__mtd.state;
+  s.progress = 600;
+  s.senbei = 10;
+  await new Promise((r) => setTimeout(r, 900));
+  const before = s.swarmCount;
+  window.__mtd.scatterSenbei(s);
+  await new Promise((r) => setTimeout(r, 400));
+  return { before, after: s.swarmCount, senbei: s.senbei, baits: s.baits.length };
+});
+check("撒くと囲みが解ける", escaped.after === 0 && escaped.senbei === 0,
+  `${escaped.before}頭 → ${escaped.after}頭 / 撒いたせんべい ${escaped.baits}`);
+
+section("操作");
+// 指を離して別の場所に置き直しても、キャラがそこへ飛ばないこと
+await page.evaluate(() => window.__mtd.startEndless());
+await page.waitForTimeout(200);
+const relative = await (async () => {
+  await page.mouse.move(pad.x + pad.width * 0.5, pad.y + pad.height * 0.5);
+  await page.mouse.down();
+  await page.waitForTimeout(400);
+  await page.mouse.up();
+  const before = await page.evaluate(() => window.__mtd.state.px);
+  // 遠く離れた場所を押し直す
+  await page.mouse.move(pad.x + pad.width * 0.05, pad.y + pad.height * 0.9);
+  await page.mouse.down();
+  await page.waitForTimeout(220);
+  const after = await page.evaluate(() => window.__mtd.state.px);
+  await page.mouse.up();
+  return Math.abs(after - before);
+})();
+check("指を置き直してもワープしない", relative < 12, `ずれ ${relative.toFixed(1)}px`);
 
 // ---- 公平さ（ここが本丸） ----
 section("公平さ：安全回廊は本当に通れるか");

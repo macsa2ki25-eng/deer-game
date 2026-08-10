@@ -1,10 +1,10 @@
 /**
  * 操作。
  *
- * 指はゲーム画面に触らない。下段のパッドを撫でると、その位置が
- * そのままプレイヤーの目標位置になる（絶対位置指定）。
- * ワープはしない——移動速度は game.ts で LATERAL に頭打ちしてあるので、
- * パッドの端から端へ飛ばしても、キャラは歩いて追いかける。
+ * 指はゲーム画面に触らない。下段のパッドを撫でて動かす。
+ * 動かし方は**相対**：指を置いた場所を基準に、そこからの移動ぶんだけキャラが動く。
+ * だから指を離して別の場所に置き直しても、キャラはその場から続きを動く。
+ * 移動速度は game.ts で頭打ちしてあるので、速く払ってもワープはしない。
  */
 
 import * as C from "./config";
@@ -37,6 +37,8 @@ export const REACH = {
 export interface InputOptions {
   /** 最初の操作。AudioContext の解錠に使う。 */
   onFirstInput: () => void;
+  /** いまのキャラの位置。指を置き直したときの基準にする。 */
+  playerPos: () => { x: number; y: number };
 }
 
 export function attachInput(pad: HTMLElement, opts: InputOptions): InputState {
@@ -52,25 +54,46 @@ export function attachInput(pad: HTMLElement, opts: InputOptions): InputState {
     opts.onFirstInput();
   };
 
-  const setTarget = (clientX: number, clientY: number) => {
+  // 指を置いた場所と、そのときのキャラの位置。ここからの差分で動かす。
+  let anchorClientX = 0;
+  let anchorClientY = 0;
+  let anchorX = 0;
+  let anchorY = 0;
+
+  const metrics = () => {
     const r = pad.getBoundingClientRect();
-    if (!r.width || !r.height) return;
-    st.padU = clamp01((clientX - r.left) / r.width);
-    st.padV = clamp01((clientY - r.top) / r.height);
-    st.tx = REACH.x0 + st.padU * (REACH.x1 - REACH.x0);
-    st.ty = REACH.y0 + st.padV * (REACH.y1 - REACH.y0);
+    if (!r.width || !r.height) return null;
+    // パッド全体を撫でると可動域いっぱいをちょうど動かせる倍率
+    return { kx: (REACH.x1 - REACH.x0) / r.width, ky: (REACH.y1 - REACH.y0) / r.height, r };
+  };
+
+  const beginDrag = (clientX: number, clientY: number) => {
+    const here = opts.playerPos();
+    anchorClientX = clientX;
+    anchorClientY = clientY;
+    anchorX = st.tx ?? here.x;
+    anchorY = st.ty ?? here.y;
+  };
+
+  const dragTo = (clientX: number, clientY: number) => {
+    const m = metrics();
+    if (!m) return;
+    st.tx = Math.max(REACH.x0, Math.min(REACH.x1, anchorX + (clientX - anchorClientX) * m.kx));
+    st.ty = Math.max(REACH.y0, Math.min(REACH.y1, anchorY + (clientY - anchorClientY) * m.ky));
+    st.padU = clamp01((clientX - m.r.left) / m.r.width);
+    st.padV = clamp01((clientY - m.r.top) / m.r.height);
   };
 
   pad.addEventListener("pointerdown", (e) => {
     first();
     st.touching = true;
-    setTarget(e.clientX, e.clientY);
+    beginDrag(e.clientX, e.clientY);
     pad.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
 
   pad.addEventListener("pointermove", (e) => {
-    if (st.touching) setTarget(e.clientX, e.clientY);
+    if (st.touching) dragTo(e.clientX, e.clientY);
   });
 
   const release = (e: PointerEvent) => {
