@@ -70,7 +70,9 @@ export function deerSpeed(dist: number): number {
  * 行はスクロール速度と同じ毎秒 v 行で流れてくるので、実際の湧き量は v × これ。
  */
 export function poopRate(dist: number): number {
-  return (0.8 + 0.5 * (1 - Math.exp(-dist / 500))) * WIDTH_K;
+  // 裾を長くしてある。時定数が短いと600m 付近で頭打ちになり、
+  // それ以降なにも変化しなくなって「レベルが上がった感じ」が消える。
+  return (0.8 + 1.2 * (1 - Math.exp(-dist / 1400))) * WIDTH_K;
 }
 
 /** 鹿の出現間隔 [s] */
@@ -80,20 +82,58 @@ export function deerInterval(dist: number): number {
 
 /** 追い鹿の割合 */
 export function homingShare(dist: number): number {
-  return Math.min(0.45, dist / 2500);
+  if (levelOf(dist) < UNLOCK.homing) return 0;
+  return Math.min(0.45, (dist - (UNLOCK.homing - 1) * LEVEL_M) / 2000);
 }
 
 /** 牡鹿（突進）の割合 */
 export function stagShare(dist: number): number {
-  return dist < 400 ? 0 : Math.min(0.2, (dist - 400) / 4000);
+  if (levelOf(dist) < UNLOCK.stag) return 0;
+  return Math.min(0.2, (dist - (UNLOCK.stag - 1) * LEVEL_M) / 4000);
 }
 
 /** 横から入る鹿の割合。 */
 export const SIDE_SHARE = 0.3;
 
-/** 道の途中で立ち止まってフンをする鹿の割合。距離200mから出る。 */
+// ---- レベル ----
+
+/** 1レベルあたりの距離[m]。 */
+export const LEVEL_M = 100;
+
+export function levelOf(dist: number): number {
+  return Math.floor(dist / LEVEL_M) + 1;
+}
+
+/**
+ * レベルごとの解禁。
+ * 数字を滑らかに上げるだけだと変化が体感できないので、
+ * 「新しい要素が出てくる」という形で段差を作る。
+ */
+export const UNLOCK = {
+  stall: 2,   // 鹿せんべい売り場
+  side: 2,    // 横から入る鹿
+  pooper: 3,  // 道でフンをする鹿
+  tree: 4,    // 木で道が狭まる
+  stag: 5,    // 牡鹿
+  homing: 6,  // 追いかけてくる鹿
+} as const;
+
+/** レベルアップ時に画面へ出す一言。無い回は null。 */
+export function levelNote(level: number): string | null {
+  switch (level) {
+    case UNLOCK.side: return "よこから 鹿がくる";
+    case UNLOCK.pooper: return "鹿が 道でしはじめる";
+    case UNLOCK.tree: return "木で 道がせまくなる";
+    case UNLOCK.stag: return "つのの ある鹿";
+    case UNLOCK.homing: return "おいかけてくる鹿";
+    case 8: return "でかいフンが ふえる";
+    default: return null;
+  }
+}
+
+/** 道の途中で立ち止まってフンをする鹿の割合。 */
 export function pooperShare(dist: number): number {
-  return dist < 200 ? 0 : 0.18;
+  return levelOf(dist) < UNLOCK.pooper ? 0 : 0.22;
 }
 
 // ---- フンの置き方 ----
@@ -122,8 +162,14 @@ export const POOPER_STOP = 1.5;
  * 一定幅にすると「フンの無い帯」が見えてしまい、正解の道が絵で分かってしまう。
  * 行ごとに揺らして、縁を不揃いにする。
  */
-export const CORRIDOR_HALF_MIN = 11;
-export const CORRIDOR_HALF_MAX = 19;
+/**
+ * 最小幅はグレイズの届く距離より広く取る。
+ * プレイヤーの当たり判定の半幅4px + GRAZE_PAD 8px = 12px なので、
+ * 半幅が12を割ると「安全な線の真ん中を歩いているだけでかすめてしまう」。
+ * 攻めと守りの差が消えるので、12より広い14を下限にする。
+ */
+export const CORRIDOR_HALF_MIN = 14;
+export const CORRIDOR_HALF_MAX = 20;
 
 /**
  * 理論上、回廊が1行でずれてよい上限は LATERAL / v
@@ -149,6 +195,34 @@ export function corridorDrift(dist: number): number {
 export const PEBBLE_RATE = 3.2;
 /** そのうち回廊の中に置く割合。フンが入れない場所を埋めないと帯が消えない。 */
 export const PEBBLE_IN_CORRIDOR = 0.6;
+
+// ---- 鹿せんべい ----
+
+/** 売り場を1つ通ると手に入る枚数。 */
+export const SENBEI_PER_STALL = 5;
+/** 売り場の出る間隔[s]。頻繁だとありがたみが無い。 */
+export const STALL_INTERVAL_MIN = 22;
+export const STALL_INTERVAL_MAX = 38;
+export const STALL_BOX = { w: 20, h: 14, hitX: 2, hitY: 2, hitW: 16, hitH: 10 } as const;
+
+/** せんべいを持っているあいだ、鹿はこの倍率で寄ってくる。 */
+export const SENBEI_RUSH_SPEED = 1.7;
+export const SENBEI_RUSH_HOMING = 110;
+/** この距離まで近づけば、ぶつかる前にせんべいを渡せる。 */
+export const FEED_RADIUS = 22;
+export const FEED_SCORE = 400;
+/** 渡すとゲージも少し上がる。 */
+export const FEED_GAUGE = 0.25;
+
+// ---- 木（通れない） ----
+
+export const TREE_BOX = { w: 16, h: 18, hitX: 3, hitY: 4, hitW: 10, hitH: 11 } as const;
+
+/** 1行あたりに木を置く確率。 */
+export function treeRate(dist: number): number {
+  if (levelOf(dist) < UNLOCK.tree) return 0;
+  return Math.min(0.15, 0.05 + (dist - (UNLOCK.tree - 1) * LEVEL_M) / 12000);
+}
 
 // ---- 休憩区間 ----
 

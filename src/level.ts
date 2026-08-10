@@ -136,11 +136,43 @@ function placePebbles(s: State): void {
   }
 }
 
+/**
+ * 木。通れないので、回廊は必ず空けて置く。
+ * 背が18pxで1行を超えるため、縦のずれぶんの余裕も多めに取る。
+ */
+function placeTree(s: State): void {
+  // 木は背が18pxあって1行を大きくまたぐ。その間に回廊も動くので、
+  // 場所を選ぶ時点で「ずれぶんの余裕」まで含めて離しておかないと、
+  // このあとの clearOfCorridor で必ず弾かれて一本も置けない（実際そうなっていた）。
+  const dy = C.TREE_BOX.h / 2;
+  const slack = (dy / C.TILE) * C.corridorDrift(s.dist);
+  const cx = freeCentre(s, C.TREE_BOX.w / 2 + slack + 2);
+  if (cx === null) return;
+  const x = cx - C.TREE_BOX.w / 2;
+  if (!clearOfCorridor(s, x, C.TREE_BOX.w, dy)) return;
+  s.trees.push({ x, y: BASE_Y - C.TREE_BOX.h });
+}
+
+/**
+ * 鹿せんべい売り場。回廊の上に置く。
+ * 安全な線の上に置くことで「必ず取りに行ける」ようにし、
+ * 危険は取ったあと（鹿が寄ってくる）に回す。
+ */
+export function spawnStall(s: State): void {
+  s.stalls.push({
+    x: Math.max(C.PATH.x0, Math.min(C.PATH.x1 - C.STALL_BOX.w, s.corridor - C.STALL_BOX.w / 2)),
+    y: BASE_Y - C.STALL_BOX.h,
+    taken: false,
+  });
+}
+
 /** 1行(16px)ぶん。塊をいくつ置くかを距離から決める。 */
 export function spawnRow(s: State): void {
   advanceCorridor(s);
   placePebbles(s);
   if (C.inRest(s.dist)) return;
+
+  if (Math.random() < C.treeRate(s.dist)) placeTree(s);
 
   const rate = C.poopRate(s.dist);
   const n = Math.floor(rate) + (Math.random() < rate % 1 ? 1 : 0);
@@ -188,7 +220,7 @@ export function scheduleDeer(s: State): void {
     return;
   }
 
-  if (Math.random() < C.SIDE_SHARE) {
+  if (C.levelOf(s.dist) >= C.UNLOCK.side && Math.random() < C.SIDE_SHARE) {
     const fromLeft = Math.random() < 0.5;
     s.warns.push({
       edge: fromLeft ? "left" : "right",
@@ -224,7 +256,9 @@ export function hatchDeer(s: State, w: Warn): void {
       vx: 0,
       squat: 0,
       dropIn: 0,
-      dropsLeft: 0,
+      // ここを 0 のまま作っていたので、種類だけ pooper で中身はただ歩く鹿だった。
+      // 落とす粒を持たせないと立ち止まる条件が一生成立しない。
+      dropsLeft: w.kind === "pooper" ? C.POOPER_PELLETS : 0,
     });
     return;
   }

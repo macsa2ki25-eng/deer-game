@@ -147,6 +147,18 @@
 
   #rotate{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:var(--bg);text-align:center;font-size:15px;padding:24px;z-index:20}
   #rotate.show{display:flex}
+  /* レベルアップや入手を、ゲーム画面の上に一瞬だけ出す。 */
+  #banner{
+    position:absolute;left:0;right:0;top:13%;text-align:center;pointer-events:none;z-index:1;
+    font-size:clamp(12px,3.8vmin,19px);font-weight:700;letter-spacing:.05em;color:#f2e3c8;
+    text-shadow:0 2px 0 rgba(17,20,14,.95),0 0 10px rgba(17,20,14,.95);
+    opacity:0;transition:opacity .18s ease;
+  }
+  #banner.show{opacity:1}
+  /* せんべいを持っているあいだは目立たせる（鹿が寄ってくる危険な状態） */
+  #senbei-tile.has{border-color:var(--graze)}
+  #senbei-tile.has .value{color:var(--graze)}
+
   /* ゲーム画面には極力かぶせない。抜ける手段だけ小さく置く。 */
   #quit{
     position:absolute;right:3px;top:3px;z-index:2;background:rgba(17,20,14,.45);
@@ -160,6 +172,7 @@
   <div id="app">
     <div id="stage">
       <canvas id="screen" width="224" height="176"></canvas>
+      <div id="banner"></div>
       <button id="quit" type="button" aria-label="やめる">×</button>
     </div>
 
@@ -182,13 +195,17 @@
           <span class="label">きょり</span>
           <span class="value"><span id="dist">0</span><small>m</small></span>
         </div>
+        <div class="tile" id="senbei-tile">
+          <span class="label">せんべい</span>
+          <span class="value" id="senbei">0</span>
+        </div>
+        <div class="tile span2">
+          <span class="label">よごれ</span>
+          <div id="dirt"></div>
+        </div>
         <div class="tile">
           <span class="label">グレイズ</span>
           <span class="value" id="graze">0</span>
-        </div>
-        <div class="tile span3">
-          <span class="label">よごれ</span>
-          <div id="dirt"></div>
         </div>
       </div>
 

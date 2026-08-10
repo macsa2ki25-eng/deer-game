@@ -28,6 +28,9 @@ const el = {
   mult: $<HTMLSpanElement>("mult"),
   dist: $<HTMLSpanElement>("dist"),
   graze: $<HTMLSpanElement>("graze"),
+  senbei: $<HTMLSpanElement>("senbei"),
+  senbeiTile: $<HTMLDivElement>("senbei-tile"),
+  banner: $<HTMLDivElement>("banner"),
   gauge: $<HTMLElement>("gauge"),
   dirt: $<HTMLDivElement>("dirt"),
 };
@@ -304,10 +307,6 @@ function finishRun(cleared: boolean): void {
 
 // ---------- HUD ----------
 
-function bestScore(): number {
-  return ranking.length ? ranking[0].score : 0;
-}
-
 function updateStats(): void {
   el.score.textContent = Math.floor(state.score).toLocaleString("en-US");
   el.mult.textContent = `×${state.mult.toFixed(2)}`;
@@ -317,14 +316,17 @@ function updateStats(): void {
   for (let i = 0; i < dirtBlocks.length; i++) {
     dirtBlocks[i].classList.toggle("on", i < state.dirt);
   }
+  el.senbei.textContent = String(state.senbei);
+  el.senbeiTile.classList.toggle("has", state.senbei > 0);
+
   if (state.mode === "stage") {
     el.scoreLabel.textContent = `スコア（${state.stage}面）`;
     el.goalLabel.textContent = "ゴールまで";
     el.best.textContent = `${Math.max(0, Math.ceil(state.goal - state.progress))}`;
   } else {
     el.scoreLabel.textContent = "スコア";
-    el.goalLabel.textContent = "ベスト";
-    el.best.textContent = Math.floor(bestScore()).toLocaleString("en-US");
+    el.goalLabel.textContent = "レベル";
+    el.best.textContent = String(state.level);
   }
 }
 
@@ -363,6 +365,12 @@ function frame(now: number): void {
 
   render(ctx, state, bg);
   updateMarkers();
+
+  const showBanner = state.bannerT > 0 && state.phase === "playing";
+  el.banner.classList.toggle("show", showBanner);
+  if (showBanner && el.banner.textContent !== state.banner) {
+    el.banner.textContent = state.banner;
+  }
 
   statsTimer += dt;
   if (statsTimer >= 0.05) {

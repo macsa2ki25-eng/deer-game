@@ -2,7 +2,7 @@
 
 import * as C from "./config";
 import type { State, Deer } from "./state";
-import { spawnRow, scheduleDeer, hatchDeer, dropFromDeer } from "./level";
+import { spawnRow, scheduleDeer, hatchDeer, dropFromDeer, spawnStall } from "./level";
 import { sfx } from "./audio";
 import type { InputState } from "./input";
 
@@ -74,7 +74,92 @@ function updatePooper(s: State, d: Deer, dt: number): void {
   }
 }
 
+/**
+ * 木は通り抜けられない。重なっていたら、いちばん浅い向きへ押し出す。
+ * 木は上から流れてくるので「木に押される」形になり、道が狭まる感じが出る。
+ */
+function resolveTrees(s: State): void {
+  const hw = C.PLAYER.hitW;
+  const hh = C.PLAYER.hitH;
+  for (const t of s.trees) {
+    const hx = s.px + C.PLAYER.hitX;
+    const hy = s.py + C.PLAYER.hitY;
+    const bx = t.x + C.TREE_BOX.hitX;
+    const by = t.y + C.TREE_BOX.hitY;
+    const bw = C.TREE_BOX.hitW;
+    const bh = C.TREE_BOX.hitH;
+    if (!overlap(hx, hy, hw, hh, bx, by, bw, bh)) continue;
+
+    const outLeft = bx - (hx + hw);
+    const outRight = bx + bw - hx;
+    const outUp = by - (hy + hh);
+    const outDown = by + bh - hy;
+    const dx = Math.abs(outLeft) < Math.abs(outRight) ? outLeft : outRight;
+    const dy = Math.abs(outUp) < Math.abs(outDown) ? outUp : outDown;
+    if (Math.abs(dx) <= Math.abs(dy)) s.px += dx;
+    else s.py += dy;
+  }
+  s.px = Math.max(C.PATH.x0, Math.min(C.PATH.x1 - C.PLAYER.w, s.px));
+  s.py = Math.max(C.PLAY_Y.top, Math.min(C.PLAY_Y.bottom, s.py));
+}
+
+/** 売り場を通ったら、せんべいを受け取る。 */
+function resolveStalls(s: State): void {
+  const hx = s.px + C.PLAYER.hitX;
+  const hy = s.py + C.PLAYER.hitY;
+  for (const st of s.stalls) {
+    if (st.taken) continue;
+    if (!overlap(hx, hy, C.PLAYER.hitW, C.PLAYER.hitH,
+      st.x + C.STALL_BOX.hitX, st.y + C.STALL_BOX.hitY, C.STALL_BOX.hitW, C.STALL_BOX.hitH)) continue;
+    st.taken = true;
+    s.senbei = C.SENBEI_PER_STALL;
+    sfx.pickup();
+    banner(s, `せんべい ×${C.SENBEI_PER_STALL}`, 1.6);
+  }
+}
+
+/**
+ * せんべいを持っているとき、ぶつかる手前で1頭に渡せる。
+ * 判定を当たり判定より少しだけ広く取ってあるので、
+ * 「寄ってきた鹿をぎりぎりで餌付けしてかわす」という遊びになる。
+ * 渡しそこねればそのまま衝突する。
+ */
+function resolveFeed(s: State): void {
+  if (s.senbei <= 0) return;
+  const cx = s.px + C.PLAYER.w / 2;
+  const cy = s.py + C.PLAYER.h / 2;
+  for (let i = s.deer.length - 1; i >= 0; i--) {
+    const d = s.deer[i];
+    const dx = d.x + C.DEER_BOX.w / 2 - cx;
+    const dy = d.y + C.DEER_BOX.h / 2 - cy;
+    if (dx * dx + dy * dy > C.FEED_RADIUS * C.FEED_RADIUS) continue;
+    s.deer.splice(i, 1);
+    s.senbei--;
+    s.fed++;
+    s.score += C.FEED_SCORE * s.mult;
+    s.grazeGauge = Math.min(C.GRAZE_MAX, s.grazeGauge + C.FEED_GAUGE);
+    sfx.feed();
+    return; // 1フレームに1頭まで
+  }
+}
+
+/** 画面の上に一言出す。 */
+function banner(s: State, text: string, seconds: number): void {
+  s.banner = text;
+  s.bannerT = seconds;
+}
+
 function moveEntities(s: State, vpx: number, dt: number): void {
+  for (let i = s.trees.length - 1; i >= 0; i--) {
+    s.trees[i].y += vpx * dt;
+    if (s.trees[i].y > C.VIEW.h + 8) s.trees.splice(i, 1);
+  }
+
+  for (let i = s.stalls.length - 1; i >= 0; i--) {
+    s.stalls[i].y += vpx * dt;
+    if (s.stalls[i].y > C.VIEW.h + 8) s.stalls.splice(i, 1);
+  }
+
   for (let i = s.poops.length - 1; i >= 0; i--) {
     s.poops[i].y += vpx * dt;
     if (s.poops[i].y > C.VIEW.h + 8) s.poops.splice(i, 1);
@@ -93,14 +178,18 @@ function moveEntities(s: State, vpx: number, dt: number): void {
     if (t.y > C.VIEW.h + 20) s.tourists.splice(i, 1);
   }
 
+  // せんべいを持っていると、鹿はすごい勢いで寄ってくる
+  const rush = s.senbei > 0;
   for (let i = s.deer.length - 1; i >= 0; i--) {
     const d = s.deer[i];
     if (d.kind === "pooper") updatePooper(s, d, dt);
-    d.y += (vpx + d.sp) * dt;
+    const rushing = rush && d.squat <= 0 && d.kind !== "side";
+    d.y += (vpx + d.sp * (rushing ? C.SENBEI_RUSH_SPEED : 1)) * dt;
     d.x += d.vx * dt;
-    if (d.kind === "homing") {
+    if (d.kind === "homing" || rushing) {
       const target = s.px - (C.DEER_BOX.w - C.PLAYER.w) / 2;
-      d.x += Math.max(-30 * dt, Math.min(30 * dt, (target - d.x) * 1.4 * dt));
+      const rate = rushing ? C.SENBEI_RUSH_HOMING : 30;
+      d.x += Math.max(-rate * dt, Math.min(rate * dt, (target - d.x) * 1.6 * dt));
     }
     if (d.y > C.VIEW.h + 20 || d.x < -40 || d.x > C.VIEW.w + 40) s.deer.splice(i, 1);
   }
@@ -194,6 +283,27 @@ export function step(s: State, input: InputState, dt: number): void {
   s.scrollPx += vpx * dt;
   s.walkAcc += vpx * dt;
 
+  // レベル。数字と一言で「上がったこと」を必ず見せる
+  s.bannerT -= dt;
+  const lv = C.levelOf(s.dist);
+  if (lv !== s.level) {
+    s.level = lv;
+    if (s.mode === "endless") {
+      const note = C.levelNote(lv);
+      banner(s, note ? `レベル ${lv} ／ ${note}` : `レベル ${lv}`, note ? 2.4 : 1.5);
+      sfx.levelUp();
+    }
+  }
+
+  // 鹿せんべい売り場
+  if (C.levelOf(s.dist) >= C.UNLOCK.stall && !C.inRest(s.dist)) {
+    s.stallTimer -= dt;
+    if (s.stallTimer <= 0) {
+      spawnStall(s);
+      s.stallTimer = C.STALL_INTERVAL_MIN + Math.random() * (C.STALL_INTERVAL_MAX - C.STALL_INTERVAL_MIN);
+    }
+  }
+
   // 休憩区間に入った合図（緩急が無いとエンドレスは飽きる）
   if (s.mode === "endless") {
     const restIndex = Math.floor(s.dist / C.REST_EVERY_M);
@@ -210,6 +320,7 @@ export function step(s: State, input: InputState, dt: number): void {
   }
 
   movePlayer(s, input, dt);
+  resolveTrees(s);
 
   s.inv -= dt;
   s.stun -= dt;
@@ -242,6 +353,8 @@ export function step(s: State, input: InputState, dt: number): void {
     }
   }
 
+  resolveStalls(s);
+  resolveFeed(s); // ぶつかる前に渡せるよう、衝突判定より先に見る
   if (resolvePoops(s)) return;
   if (resolveDeer(s)) return;
 

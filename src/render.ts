@@ -20,6 +20,14 @@ export function render(ctx: CanvasRenderingContext2D, s: State, bg: HTMLCanvasEl
     ctx.drawImage(spr, Math.round(p.x), Math.round(p.y));
   }
 
+  for (const st of s.stalls) {
+    ctx.drawImage(SPR.stall, Math.round(st.x), Math.round(st.y));
+  }
+
+  for (const t of s.trees) {
+    ctx.drawImage(SPR.tree, Math.round(t.x), Math.round(t.y));
+  }
+
   for (const t of s.tourists) {
     ctx.drawImage(SPR.tourist, Math.round(t.x), Math.round(t.y));
   }

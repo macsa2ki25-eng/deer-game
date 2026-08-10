@@ -43,6 +43,19 @@ export interface Tourist {
   y: number;
 }
 
+/** 鹿せんべい売り場。通ると5枚もらえる。 */
+export interface Stall {
+  x: number;
+  y: number;
+  taken: boolean;
+}
+
+/** 木。通れない。道を狭める役。 */
+export interface Tree {
+  x: number;
+  y: number;
+}
+
 export interface Warn {
   edge: Edge;
   kind: DeerKind;
@@ -72,6 +85,16 @@ export interface State {
   grazeGauge: number;
   mult: number;
 
+  /** 手持ちの鹿せんべい。持っていると鹿が寄ってくる。 */
+  senbei: number;
+  /** 渡した枚数（表示用）。 */
+  fed: number;
+  /** いまのレベル。エンドレスの進み具合を数字で見せる。 */
+  level: number;
+  /** 画面に出す一言と残り時間[s]。 */
+  banner: string;
+  bannerT: number;
+
   px: number;
   py: number;
 
@@ -91,10 +114,13 @@ export interface State {
 
   deerTimer: number;
   touristTimer: number;
+  stallTimer: number;
   restShown: number;
 
   poops: Poop[];
   pebbles: Pebble[];
+  stalls: Stall[];
+  trees: Tree[];
   deer: Deer[];
   tourists: Tourist[];
   warns: Warn[];
@@ -134,9 +160,17 @@ export function resetRun(s: State): void {
   s.corridorHalf = (C.CORRIDOR_HALF_MIN + C.CORRIDOR_HALF_MAX) / 2;
   s.deerTimer = 1.6;
   s.touristTimer = 3;
+  s.stallTimer = C.STALL_INTERVAL_MIN;
   s.restShown = 0;
+  s.senbei = 0;
+  s.fed = 0;
+  s.level = C.levelOf(s.dist);
+  s.banner = "";
+  s.bannerT = 0;
   s.poops = [];
   s.pebbles = [];
+  s.stalls = [];
+  s.trees = [];
   s.deer = [];
   s.tourists = [];
   s.warns = [];
