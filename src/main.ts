@@ -8,6 +8,7 @@ import { step } from "./game";
 import { render } from "./render";
 import { unlock, setEnabled } from "./audio";
 import * as store from "./storage";
+import * as ads from "./ads";
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
@@ -194,6 +195,7 @@ function beginRun(): void {
   unlock();
   resetRun(state);
   state.phase = "playing";
+  continuedThisRun = false;
   showScreen(null);
   updateStats();
 }
@@ -242,12 +244,43 @@ const rankResult = $<HTMLDivElement>("rank-result");
 const btnNext = $<HTMLButtonElement>("btn-next");
 const btnRetry = $<HTMLButtonElement>("btn-retry");
 const btnBack = $<HTMLButtonElement>("btn-back");
+const btnContinue = $<HTMLButtonElement>("btn-continue");
 
-btnRetry.addEventListener("click", () => {
+/** この1回のプレイでもう復活したか。1回きりにしないと記録の意味が消える。 */
+let continuedThisRun = false;
+
+/**
+ * 動画を見てその場から再開する。
+ * 距離もスコアも引き継ぐので、汚れを全快にはしない（ads.ts の CONTINUE_DIRT）。
+ */
+btnContinue.addEventListener("click", async () => {
+  btnContinue.disabled = true;
+  const watched = await ads.showContinueAd();
+  btnContinue.disabled = false;
+  if (!watched) return;
+
+  continuedThisRun = true;
+  state.dirt = ads.CONTINUE_DIRT;
+  state.inv = ads.CONTINUE_INV;
+  state.stun = 0;
+  state.slip = 0;
+  state.encircled = false;
+  state.swarmCount = 0;
+  // 目の前に残っている鹿はどけておく。無敵が切れた瞬間に轢かれては意味がない。
+  state.deer.length = 0;
+  state.warns.length = 0;
+  state.phase = "playing";
+  showScreen(null);
+  updateStats();
+});
+
+btnRetry.addEventListener("click", async () => {
+  await ads.runFinished();
   if (state.mode === "stage") startStage(state.stage);
   else startEndless();
 });
-btnBack.addEventListener("click", () => {
+btnBack.addEventListener("click", async () => {
+  await ads.runFinished();
   if (state.mode === "stage") {
     renderStageSelect();
     showScreen("stages");
@@ -266,6 +299,11 @@ btnNext.addEventListener("click", () => {
 
 function finishRun(cleared: boolean): void {
   const num = (v: number) => Math.floor(v).toLocaleString("en-US");
+
+  // 1回遊んでもらってから広告を用意する。起動直後にATTを出しても拒否されるだけ。
+  void ads.initAds();
+  // 読み込み済みのときしか出さない。押してから「読み込めません」が最悪なので。
+  btnContinue.hidden = cleared || continuedThisRun || !ads.canOfferContinue();
 
   if (state.mode === "stage") {
     rankResult.hidden = true;

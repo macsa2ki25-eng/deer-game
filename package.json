@@ -3,16 +3,27 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "鹿のフンを避けて歩く縦スクロール避けゲー（P0: エンドレスのみ）",
+  "description": "鹿のフンを避けて参道を歩く、16bit風の縦スクロール避けゲー",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run build && node test/verify.mjs"
+    "verify": "npm run build && node test/verify.mjs",
+    "icons": "node tools/make-icons.mjs",
+    "ios:sync": "npm run build && npx cap sync ios",
+    "ios:open": "npx cap open ios"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/ios": "^8.5.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
+  },
+  "dependencies": {
+    "@capacitor-community/admob": "^8.0.0",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/status-bar": "^8.0.3"
   }
 }
