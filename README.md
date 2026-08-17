@@ -120,7 +120,25 @@ npm run verify   # ビルドして実ブラウザで遊ばせ、設計の主張�
 
 難易度の式は両モード共通。ステージ n は「エンドレスの (n−1)×18 m 地点から始める」だけ。
 
+## iOS（App Store）
+
+**Expo + EAS Build**。Mac は要らない。手順は [`docs/IOS.md`](docs/IOS.md)。
+
+```
+src/ ──build──> dist/ ──bundle──> native/game-html.ts ──> App.tsx の WebView
+```
+
+ゲーム本体は web アプリのまま。RN 側が持つのは**広告と保存だけ**で、
+`src/native.ts` はブラウザでは全部空振りになるので、
+`npm run dev` と `npm run verify` は RN の存在を知らないまま動く。
+
+```bash
+npm run dev           # ブラウザでゲームを作る（いちばん速い）
+npm run native:sync   # 実機に載せる前に必ず。忘れると古いゲームが入る
+npm start             # Dev Client で起動（広告あり）
+npm run start:go      # Expo Go で起動（広告は出ない。ゲームは遊べる）
+```
+
 ## 次
 
-チャンクによる手づくり地形とボス、そして iOS（App Store）。
-iOS 化の手順は [`docs/IOS.md`](docs/IOS.md)。
+チャンクによる手づくり地形とボス。広告の単価より継続率のほうが効く（`docs/IOS.md` §9）。

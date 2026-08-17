@@ -56,10 +56,14 @@ function corridorOnly(s: State): Lane[] {
   return [{ x: s.corridor, half: s.corridorHalf }];
 }
 
-/** 本物＋見せかけ。フンはこのぜんぶを空ける。幅の揺らし方も同じ——幅で本物がバレないように。 */
+/**
+ * 本物＋見せかけ。フンはこのぜんぶを空ける。幅の揺らし方も同じ——幅で本物がバレないように。
+ * フンだけは PELLET_CLEAR_MIN まで押し広げる（理由は config の同定数のところ）。
+ */
 function allLanes(s: State): Lane[] {
-  const out: Lane[] = [{ x: s.corridor, half: s.corridorHalf }];
-  for (const d of s.decoys) out.push({ x: d.x, half: d.half });
+  const wide = (half: number) => Math.max(half, C.PELLET_CLEAR_MIN);
+  const out: Lane[] = [{ x: s.corridor, half: wide(s.corridorHalf) }];
+  for (const d of s.decoys) out.push({ x: d.x, half: wide(d.half) });
   return out;
 }
 

@@ -71,7 +71,11 @@ function section(title) {
 function makeCorridorTracker() {
   const hist = [];
   return (s) => {
-    hist.push({ sp: s.scrollPx, c: s.corridor, half: s.corridorHalf, decoys: s.decoys });
+    hist.push({
+      sp: s.scrollPx, c: s.corridor, half: s.corridorHalf, decoys: s.decoys,
+      // フンが空いている距離。帯の幅とは別（config の PELLET_CLEAR_MIN）
+      pelletHalf: Math.max(s.corridorHalf, s.pelletClearMin),
+    });
     if (hist.length > 700) hist.shift();
     const want = s.scrollPx - (s.py + 16);
     for (let i = hist.length - 1; i >= 0; i--) if (hist[i].sp <= want) return hist[i];
@@ -116,6 +120,7 @@ async function drive(page, pad, reach, seconds, steer, opts = {}) {
         graze: s.grazeCount, mult: s.mult, poopHits: s.poopHits, deerHits: s.deerHits,
         corridor: s.corridor, corridorHalf: s.corridorHalf, scrollPx: s.scrollPx,
         decoys: s.decoys.map((d) => d.x),
+        pelletClearMin: window.__mtd.config.PELLET_CLEAR_MIN,
         px: s.px, py: s.py, senbei: s.senbei, fed: s.fed,
         trees: s.trees.length, stalls: s.stalls.length, baits: s.baits.length,
         swarmCount: s.swarmCount,
@@ -350,12 +355,16 @@ check("空いて見えるほうへ歩くと行き止まる", decoy.poopHits > co
 
 await page.evaluate(() => window.__mtd.startEndless());
 await page.waitForTimeout(150);
-// 縁を舐める線。粒は帯の縁（中心から half px）からいきなり始まるので、
-// かすめるだけで踏まない範囲は「中心から half−12 〜 half−4 px」。
-// v0.8 で塊を帯の縁ぎりぎりまで寄せたぶん、縁の外はもう舐める場所ではなく
-// ただの被弾地帯になった。ボットの振れ幅もそこに合わせる。
-const graze = await drive(page, pad, reach, 40, (_s, lag, t) =>
-  lag.c - 6 + Math.sin(t * 2.4) * (lag.half - 6), { noDeer: true });
+// 縁を舐める線。
+//
+// 粒は中心から pelletHalf px のところから始まるので、
+// 「かすめるが踏まない」のは 中心から pelletHalf−12 〜 pelletHalf−4 px の帯。
+// **その帯の中に居続ける**のが上手いプレイヤーの走り方なので、そう動かす。
+// 中心をまたいで大きく振ると、安全地帯を通っている時間が長くなって
+// 稼ぎが薄まり、「安全に歩く」との差が測れない（実際そうなっていた）。
+const grazeLine = (_s, lag, t) =>
+  lag.c - 6 + (lag.pelletHalf - 8 + Math.sin(t * 3) * 3) * (Math.sin(t * 0.35) < 0 ? -1 : 1);
+const graze = await drive(page, pad, reach, 40, grazeLine, { noDeer: true });
 check("縁を舐めるほうがよく稼げる", graze.perM > corridor.perM * 1.5,
   `縁 ${graze.perM.toFixed(2)} / 安全 ${corridor.perM.toFixed(2)} グレイズ/m`);
 check("そのぶん危ない", graze.poopHits > corridor.poopHits,

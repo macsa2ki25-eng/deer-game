@@ -1,3 +1,41 @@
+# Node / Expo
 node_modules/
+.expo/
 dist/
+web-build/
+*.log
+npm-debug.*
+
+# Vite が組み立てたゲームを畳んだもの。生成物なのでコミットしない
+# （`npm run native:sync` で作り直せる）
+native/game-html.ts
+
+# Native build artifacts
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# EAS
+.eas/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
 *.local

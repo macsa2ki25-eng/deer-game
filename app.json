@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "下ばっか見てると",
+    "slug": "deer-game",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "primaryColor": "#c9c2a6",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.macsa2ki25.deergame",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIStatusBarHidden": true,
+        "UIViewControllerBasedStatusBarAppearance": false
+      }
+    },
+    "android": {
+      "package": "com.macsa2ki25.deergame",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#c9c2a6"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#c9c2a6"
+        }
+      ],
+      [
+        "react-native-google-mobile-ads",
+        {
+          "iosAppId": "ca-app-pub-3940256099942544~1458002511",
+          "androidAppId": "ca-app-pub-3940256099942544~3347511713",
+          "userTrackingUsageDescription": "広告をあなたの興味に近いものにするために使います。許可しなくてもゲームはすべて遊べます。",
+          "skAdNetworkItems": ["cstr6suwn9.skadnetwork"]
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {}
+    },
+    "owner": "macsa2ki25"
+  }
+}

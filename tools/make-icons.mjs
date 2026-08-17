@@ -1,5 +1,6 @@
 /**
  * アプリアイコンと起動画面を作る。`npm run icons` で走る。
+ * 出力先は Expo が見る assets/（app.json の icon / splash / adaptiveIcon）。
  *
  * 素材ファイルは持たない方針なので、これも計算で描く。
  * 64×64 のドット絵を組み立てて、そのまま16倍に引き伸ばして1024pxにする。
@@ -16,8 +17,7 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ICONSET = resolve(HERE, "../ios/App/App/Assets.xcassets/AppIcon.appiconset");
-const SPLASHSET = resolve(HERE, "../ios/App/App/Assets.xcassets/Splash.imageset");
+const ASSETS = resolve(HERE, "../assets");
 const STORE = resolve(HERE, "../store");
 
 function loadPlaywright() {
@@ -145,22 +145,27 @@ async function run() {
     );
 
   mkdirSync(STORE, { recursive: true });
+  mkdirSync(ASSETS, { recursive: true });
   const write = (path, dataUrl) =>
     writeFileSync(path, Buffer.from(dataUrl.split(",")[1], "base64"));
 
-  // アイコン。角丸はiOSが勝手に切るので、こちらは正方形のまま余白なしで出す。
+  // アプリアイコン。角丸はiOSが勝手に切るので、余白なしの正方形で出す。
   const icon = await scaleTo(1024, 0);
-  write(`${ICONSET}/AppIcon-512@2x.png`, icon);
+  write(`${ASSETS}/icon.png`, icon);
   write(`${STORE}/icon-1024.png`, icon);
 
-  // 起動画面。中央に小さく置くだけ。凝るとアプリが重く見える。
-  const splash = await scaleTo(2732, 1024);
-  for (const n of ["splash-2732x2732.png", "splash-2732x2732-1.png", "splash-2732x2732-2.png"]) {
-    write(`${SPLASHSET}/${n}`, splash);
-  }
+  // Android のアダプティブアイコン。端末によって円や角丸に切られるので、
+  // 絵が中央66%に収まるよう余白を入れる。ここを詰めると耳とフンが切れる。
+  write(`${ASSETS}/adaptive-icon.png`, await scaleTo(1024, 170));
 
-  await browser.close();
-  console.log("アイコン(1024) と 起動画面(2732) を書き出しました");
+  // 起動画面に置く絵。背景色（app.json の backgroundColor）と地面の色を
+  // 揃えてあるので、四角いままでも継ぎ目は見えない。
+  write(`${ASSETS}/splash-icon.png`, await scaleTo(512, 0));
+
+  // web 版のファビコン
+  write(`${ASSETS}/favicon.png`, await scaleTo(64, 0));
+
+  console.log("assets/ に アイコン・アダプティブ・起動画面・ファビコン を書き出しました");
 }
 
 run();

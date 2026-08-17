@@ -1,6 +1,15 @@
-/** localStorage への保存。端末内だけで完結する（サーバーは使わない）。 */
+/**
+ * 保存。端末内だけで完結する（サーバーは使わない）。
+ *
+ * ブラウザでは localStorage がそのまま使える。
+ * ネイティブ（WebView）では localStorage がアプリの更新や WebView の作り直しで
+ * 消えることがあるので、**書くときはネイティブ側にも同じものを渡し、
+ * 起動時はネイティブが流し込んだ値を先に見る。**
+ * 「たぶん残っている」に★100個ぶんの記録を預けるわけにはいかない。
+ */
 
 import * as C from "./config";
+import { seeded, send } from "./native";
 
 const KEY = {
   stars: "mtd.stars",
@@ -10,20 +19,31 @@ const KEY = {
 };
 
 function load<T>(key: string, fallback: T): T {
+  // ネイティブが持っている値を優先する。localStorage が空でも復元できる。
+  let raw: string | null | undefined = seeded(key);
+  if (raw === undefined) {
+    try {
+      raw = localStorage.getItem(key);
+    } catch {
+      raw = null;
+    }
+  }
+  if (raw === null || raw === undefined) return fallback;
   try {
-    const raw = localStorage.getItem(key);
-    return raw === null ? fallback : (JSON.parse(raw) as T);
+    return JSON.parse(raw) as T;
   } catch {
     return fallback;
   }
 }
 
 function save(key: string, value: unknown): void {
+  const json = JSON.stringify(value);
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    localStorage.setItem(key, json);
   } catch {
-    /* プライベートモード等では保存を諦める */
+    /* プライベートモード等では諦める。ネイティブ側には下で渡す */
   }
+  send("store:set", { key, json });
 }
 
 // ---- ステージの★ ----
