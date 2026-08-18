@@ -42,30 +42,18 @@
   }
 
   /* ---- 下段：スコアと操作パッド ---- */
+  /* 下段は操作パッドだけ。数字はゲーム画面の HUD に移した（src/render.ts） */
   #panel{
     flex:1;width:100%;max-width:560px;min-height:0;
-    display:flex;flex-direction:column;gap:7px;padding:7px 9px 9px;
+    display:flex;flex-direction:column;padding:6px 9px 9px;
   }
-  #stats{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;flex:none}
-  .tile{
-    background:var(--tile);border:1px solid var(--line);padding:4px 8px;
-    display:flex;flex-direction:column;gap:1px;min-width:0;
-  }
-  .tile.span2{grid-column:span 2}
-  .tile.span3{grid-column:span 3;flex-direction:row;align-items:center;gap:10px}
   .label{font-size:10px;color:var(--dim);letter-spacing:.08em;line-height:1.4}
   .value{font-family:var(--num);font-variant-numeric:tabular-nums;font-size:15px;line-height:1.25}
   .value.big{font-size:clamp(20px,6.4vmin,30px);color:var(--graze);line-height:1.15}
   .value small{font-size:10px;color:var(--muted);margin-left:2px}
-  #mult-tile .value{color:var(--graze)}
-  .bar{height:3px;background:#141a10;margin-top:3px;overflow:hidden}
-  .bar i{display:block;height:100%;width:0;background:var(--graze);transition:width .07s linear}
-  #dirt{display:flex;gap:4px;margin-left:auto}
-  #dirt span{width:16px;height:10px;background:#141a10;border:1px solid var(--line)}
-  #dirt span.on{background:var(--dirt);border-color:var(--dirt)}
 
   #pad{
-    flex:1;min-height:80px;position:relative;touch-action:none;cursor:crosshair;overflow:hidden;
+    flex:1;min-height:180px;position:relative;touch-action:none;cursor:crosshair;overflow:hidden;
     background:
       linear-gradient(180deg,rgba(168,122,74,.10) 0%,transparent 42%),
       repeating-linear-gradient(0deg,#1d2417 0 1px,transparent 1px 14px),
@@ -190,42 +178,6 @@
     </div>
 
     <div id="panel">
-      <div id="stats">
-        <div class="tile span2">
-          <span class="label" id="score-label">スコア</span>
-          <span class="value big" id="score">0</span>
-        </div>
-        <div class="tile">
-          <span class="label" id="goal-label">ベスト</span>
-          <span class="value" id="best">0</span>
-        </div>
-        <div class="tile" id="mult-tile">
-          <span class="label">ばいりつ</span>
-          <span class="value" id="mult">×1.00</span>
-          <div class="bar"><i id="gauge"></i></div>
-        </div>
-        <div class="tile">
-          <span class="label">きょり</span>
-          <span class="value"><span id="dist">0</span><small>m</small></span>
-        </div>
-        <div class="tile" id="senbei-tile">
-          <span class="label">せんべい</span>
-          <span class="value" id="senbei">0</span>
-        </div>
-        <div class="tile span2">
-          <span class="label">よごれ</span>
-          <div id="dirt"></div>
-        </div>
-        <div class="tile" id="graze-tile">
-          <span class="label">グレイズ</span>
-          <span class="value" id="graze">0</span>
-        </div>
-        <div class="tile" id="swarm-tile" hidden>
-          <span class="label">かこまれた</span>
-          <span class="value" id="swarm">0</span>
-        </div>
-      </div>
-
       <div id="pad">
         <span class="pad-edge top">おく</span>
         <span class="pad-edge bottom">てまえ</span>

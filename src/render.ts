@@ -2,10 +2,92 @@
 
 import * as C from "./config";
 import type { State } from "./state";
-import { SPR } from "./sprites";
+import { HUD, SPR } from "./sprites";
 import { STRIP_H } from "./background";
 
+const SHOE = 7;
+
+/** 文字列の描画幅[px]。右寄せの起点を出すのに使う。 */
+function textWidth(str: string, scale: number): number {
+  let w = 0;
+  for (const ch of str) {
+    const g = HUD.num[ch];
+    if (g) w += (g.width + 1) * scale;
+  }
+  return w - scale;
+}
+
+/** 数字を置く。scale は整数倍のみ（ドット絵なので半端に伸ばさない）。 */
+function text(
+  ctx: CanvasRenderingContext2D,
+  set: Record<string, HTMLCanvasElement>,
+  str: string,
+  x: number,
+  y: number,
+  scale: number,
+): void {
+  let cx = x;
+  for (const ch of str) {
+    const g = set[ch];
+    if (!g) continue;
+    ctx.drawImage(g, cx, y, g.width * scale, g.height * scale);
+    cx += (g.width + 1) * scale;
+  }
+}
+
+/**
+ * 画面上端の HUD。
+ *
+ * 出すのは4つだけ——**くつ（残り）／きょり／スコア／せんべい**。
+ * 倍率・かすめた数・たかられた頭数は消した。
+ * どれも「見ても、その瞬間の操作が変わらない」数字で、
+ * 読む余裕が無いまま画面を埋めていただけだった（倍率はゲージの絵だけ残す）。
+ *
+ * ラベル文字は一切使わない。避けている最中に言葉は読めない。
+ */
+function drawHud(ctx: CanvasRenderingContext2D, s: State): void {
+  ctx.fillStyle = "#11140e";
+  ctx.fillRect(0, 0, C.CANVAS.w, C.HUD_H);
+
+  // 倍率。数字をやめてゲージだけにした。
+  // 「伸びている／減っている」が分かれば足りるもので、値そのものに用は無い。
+  const g = Math.min(1, s.grazeGauge / C.GRAZE_MAX);
+  if (g > 0) {
+    ctx.fillStyle = "#d8b45e";
+    ctx.fillRect(0, C.HUD_H - 2, Math.round(C.CANVAS.w * g), 2);
+  }
+
+  // くつ。左端。減っていくのが目の端に入る位置。
+  for (let i = 0; i < C.DIRT_MAX; i++) {
+    ctx.drawImage(i < s.dirt ? HUD.shoeBad : HUD.shoeOk, 4 + i * (SHOE + 1), 4);
+  }
+
+  // きょり。ステージでは「ゴールまで」の残りを出す。
+  const metres =
+    s.mode === "stage" ? Math.max(0, Math.ceil(s.goal - s.progress)) : Math.floor(s.progress);
+  text(ctx, HUD.numDim, `${metres}m`, 4 + C.DIRT_MAX * (SHOE + 1) + 6, 5, 1);
+
+  // スコア。いちばん大きい数字＝スコア、で通じる。だからラベルが要らない。
+  const score = String(Math.floor(s.score));
+  text(ctx, HUD.num, score, C.CANVAS.w - 4 - textWidth(score, 2), 3, 2);
+
+  // せんべい。持っているときだけ出す。0枚のときの「0」は情報ではない。
+  if (s.senbei > 0) {
+    const n = String(s.senbei);
+    const x = C.CANVAS.w - 6 - textWidth(score, 2) - textWidth(n, 1) - SHOE - 3;
+    ctx.drawImage(HUD.senbei, x, 5);
+    text(ctx, HUD.num, n, x + SHOE + 2, 5, 1);
+  }
+}
+
 export function render(ctx: CanvasRenderingContext2D, s: State, bg: HTMLCanvasElement): void {
+  // 世界を先に描く。HUD は最後に上から乗せる。
+  // 背景のストリップは世界の y<0 まで伸びているので、HUD を先に描くと塗り潰される。
+  ctx.save();
+  // ここから下は世界の座標系。HUD のぶんだけずらして、
+  // ゲーム側のコードが HUD の存在を一切知らなくて済むようにする。
+  ctx.translate(0, C.HUD_H);
+
   const off = s.scrollPx % STRIP_H;
   ctx.drawImage(bg, 0, off - STRIP_H);
   ctx.drawImage(bg, 0, off);
@@ -74,4 +156,7 @@ export function render(ctx: CanvasRenderingContext2D, s: State, bg: HTMLCanvasEl
       ctx.drawImage(SPR.warnLeft, C.VIEW.w - 6, Math.round(w.y + 6));
     }
   }
+
+  ctx.restore();
+  drawHud(ctx, s);
 }

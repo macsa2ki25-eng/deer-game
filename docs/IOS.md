@@ -113,7 +113,7 @@ JS だけの変更なら作り直さなくてよい。
    →「まだ App Store に公開していない」
 2. 出てきた**アプリID**（`ca-app-pub-XXXX~YYYY`）を
    `app.json` の `plugins` → `react-native-google-mobile-ads` → `iosAppId` に入れる
-3. 広告ユニットを2つ作る（**リワード** と **インタースティシャル**）
+3. 広告ユニットを3つ作る（**バナー** / **リワード** / **インタースティシャル**）
 4. そのユニットID（`ca-app-pub-XXXX/ZZZZ`）を `native/ads.ts` の `REAL_UNITS` に入れる
 5. AdMob が出している [SKAdNetwork の一覧](https://developers.google.com/admob/ios/data-disclosure#skadnetwork)を
    `app.json` の `skAdNetworkItems` に貼る
@@ -189,6 +189,8 @@ eas submit --profile production --platform ios
 - [ ] `native/ads.ts` の `REAL_UNITS` が本番IDになっている（`USING_TEST_ADS` が false）
 - [ ] `app.json` の `iosAppId` が自分の AdMob アプリID
 - [ ] `skAdNetworkItems` に AdMob の一覧を貼った
+- [ ] バナーが**画面のいちばん上**に出ている（パッドの近くに出ていない）
+- [ ] バナーは1回目のプレイを終えるまで出ない
 - [ ] 実機で「見て つづける」が出て、動画を最後まで見ると復活する
 - [ ] 途中で閉じたら復活**しない**
 - [ ] 機内モードで起動しても遊べる（広告が無くてもゲームは止まらない）

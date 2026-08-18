@@ -21,22 +21,10 @@ const padBody = $<HTMLDivElement>("pad-body");
 const screens = $<HTMLDivElement>("screens");
 const quitBtn = $<HTMLButtonElement>("quit");
 
+// プレイ中の数字は全部ゲーム画面（canvas）の HUD に移した。
+// 下段のDOMに残るのは、操作パッドと、レベルアップの一言だけ。
 const el = {
-  score: $<HTMLSpanElement>("score"),
-  scoreLabel: $<HTMLSpanElement>("score-label"),
-  best: $<HTMLSpanElement>("best"),
-  goalLabel: $<HTMLSpanElement>("goal-label"),
-  mult: $<HTMLSpanElement>("mult"),
-  dist: $<HTMLSpanElement>("dist"),
-  graze: $<HTMLSpanElement>("graze"),
-  senbei: $<HTMLSpanElement>("senbei"),
-  senbeiTile: $<HTMLDivElement>("senbei-tile"),
-  swarm: $<HTMLSpanElement>("swarm"),
-  swarmTile: $<HTMLDivElement>("swarm-tile"),
-  grazeTile: $<HTMLDivElement>("graze-tile"),
   banner: $<HTMLDivElement>("banner"),
-  gauge: $<HTMLElement>("gauge"),
-  dirt: $<HTMLDivElement>("dirt"),
 };
 
 const sc = {
@@ -45,8 +33,8 @@ const sc = {
   result: $<HTMLElement>("sc-result"),
 };
 
-canvas.width = C.VIEW.w;
-canvas.height = C.VIEW.h;
+canvas.width = C.CANVAS.w;
+canvas.height = C.CANVAS.h;
 const ctx = canvas.getContext("2d", { alpha: false })!;
 ctx.imageSmoothingEnabled = false;
 
@@ -64,13 +52,6 @@ const touristInput = $<HTMLInputElement>("tourists");
 soundInput.checked = soundOn;
 touristInput.checked = state.touristsOn;
 
-const dirtBlocks: HTMLSpanElement[] = [];
-for (let i = 0; i < C.DIRT_MAX; i++) {
-  const b = document.createElement("span");
-  el.dirt.appendChild(b);
-  dirtBlocks.push(b);
-}
-
 const input = attachInput(pad, {
   onFirstInput: unlock,
   playerPos: () => ({ x: state.px, y: state.py }),
@@ -83,7 +64,7 @@ const input = attachInput(pad, {
 function resize(): void {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const widthLimitedByHeight = vh * 0.46 * (C.VIEW.w / C.VIEW.h);
+  const widthLimitedByHeight = vh * 0.46 * (C.CANVAS.w / C.CANVAS.h);
   stageEl.style.width = `${Math.floor(Math.min(vw, 560, widthLimitedByHeight))}px`;
   rotate.classList.toggle("show", vw > vh * 1.25);
 }
@@ -197,7 +178,6 @@ function beginRun(): void {
   state.phase = "playing";
   continuedThisRun = false;
   showScreen(null);
-  updateStats();
 }
 
 function startEndless(): void {
@@ -271,7 +251,6 @@ btnContinue.addEventListener("click", async () => {
   state.warns.length = 0;
   state.phase = "playing";
   showScreen(null);
-  updateStats();
 });
 
 btnRetry.addEventListener("click", async () => {
@@ -351,33 +330,6 @@ function finishRun(cleared: boolean): void {
 
 // ---------- HUD ----------
 
-function updateStats(): void {
-  el.score.textContent = Math.floor(state.score).toLocaleString("en-US");
-  el.mult.textContent = `×${state.mult.toFixed(2)}`;
-  el.dist.textContent = String(Math.floor(state.progress));
-  el.graze.textContent = String(state.grazeCount);
-  el.gauge.style.width = `${(state.grazeGauge / C.GRAZE_MAX) * 100}%`;
-  for (let i = 0; i < dirtBlocks.length; i++) {
-    dirtBlocks[i].classList.toggle("on", i < state.dirt);
-  }
-  el.senbei.textContent = String(state.senbei);
-  el.senbeiTile.classList.toggle("has", state.senbei > 0);
-  el.swarm.textContent = String(state.swarmCount);
-  el.swarmTile.classList.toggle("bad", state.encircled);
-  el.swarmTile.hidden = !state.encircled;
-  el.grazeTile.hidden = state.encircled;
-
-  if (state.mode === "stage") {
-    el.scoreLabel.textContent = `スコア（${state.stage}面）`;
-    el.goalLabel.textContent = "ゴールまで";
-    el.best.textContent = `${Math.max(0, Math.ceil(state.goal - state.progress))}`;
-  } else {
-    el.scoreLabel.textContent = "スコア";
-    el.goalLabel.textContent = "レベル";
-    el.best.textContent = String(state.level);
-  }
-}
-
 /** パッド上に、指の位置（輪）とキャラの実際の位置（点）を出す。ずれが操作の手応えになる。 */
 function updateMarkers(): void {
   const u = (state.px - REACH.x0) / (REACH.x1 - REACH.x0);
@@ -394,7 +346,6 @@ function updateMarkers(): void {
 const FIXED = 1 / 60;
 let last = 0;
 let acc = 0;
-let statsTimer = 0;
 let wasPlaying = false;
 
 function frame(now: number): void {
@@ -420,14 +371,7 @@ function frame(now: number): void {
     el.banner.textContent = state.banner;
   }
 
-  statsTimer += dt;
-  if (statsTimer >= 0.05) {
-    statsTimer = 0;
-    updateStats();
-  }
-
   if (wasPlaying && state.phase !== "playing") {
-    updateStats();
     if (state.phase === "over" || state.phase === "clear") finishRun(state.phase === "clear");
   }
   wasPlaying = state.phase === "playing";
@@ -444,5 +388,4 @@ if (new URLSearchParams(location.search).has("debug")) {
 }
 
 showScreen("title");
-updateStats();
 requestAnimationFrame(frame);

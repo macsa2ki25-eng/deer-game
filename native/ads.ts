@@ -21,6 +21,8 @@ import mobileAds, {
   TestIds,
 } from "react-native-google-mobile-ads";
 
+export { BannerAd, BannerAdSize } from "react-native-google-mobile-ads";
+
 /**
  * 広告ユニットID。
  *
@@ -35,6 +37,16 @@ const REAL_UNITS = {
   rewarded: "ca-app-pub-0000000000000000/0000000000",
   /** 結果画面のあと。 */
   interstitial: "ca-app-pub-0000000000000000/0000000000",
+  /**
+   * 画面のいちばん上に出しっぱなしのバナー。
+   *
+   * **置き場所を画面の最上部に決めたのは、そこだけが指の来ない場所だから。**
+   * 操作パッドは画面の下半分にあり、親指はその中で動く。
+   * バナーをパッドの近くに置くと、誤タップが増える。
+   * 誤タップは Google に無効なトラフィックと判断され、
+   * 最悪アカウントごと止まる——単価より先に守るべきものがそこにある。
+   */
+  banner: "ca-app-pub-0000000000000000/0000000000",
 };
 
 /** 差し替え前のダミーかどうか。ダミーのあいだはテストIDで動かす。 */
@@ -44,7 +56,15 @@ const useTest = __DEV__ || PLACEHOLDER.test(REAL_UNITS.rewarded);
 const UNITS = {
   rewarded: useTest ? TestIds.REWARDED : REAL_UNITS.rewarded,
   interstitial: useTest ? TestIds.INTERSTITIAL : REAL_UNITS.interstitial,
+  banner: useTest ? TestIds.ADAPTIVE_BANNER : REAL_UNITS.banner,
 };
+
+export const BANNER_UNIT = UNITS.banner;
+
+/** バナーの広告リクエスト設定。同意が取れていなければパーソナライズしない。 */
+export function bannerRequest(): { requestNonPersonalizedAdsOnly: boolean } {
+  return { requestNonPersonalizedAdsOnly: npa };
+}
 
 export const USING_TEST_ADS = useTest;
 

@@ -194,11 +194,21 @@ await page.waitForTimeout(400);
 section("画面");
 const geo = await page.evaluate(() => {
   const r = document.getElementById("screen").getBoundingClientRect();
-  return { w: r.width, h: r.height, vw: window.innerWidth, vh: window.innerHeight };
+  const p = document.getElementById("pad").getBoundingClientRect();
+  return { w: r.width, h: r.height, pad: p.height, vw: window.innerWidth, vh: window.innerHeight };
 });
 check("ゲーム画面が横幅いっぱい（左右に余白なし）", Math.abs(geo.w - geo.vw) <= 1,
   `${geo.w.toFixed(0)}×${geo.h.toFixed(0)} / 画面 ${geo.vw}×${geo.vh}`);
 check("下段に十分な高さが残る", geo.h / geo.vh < 0.5, `ゲーム画面は高さの ${(geo.h / geo.vh * 100).toFixed(0)}%`);
+
+// 数字をゲーム画面のHUDへ移した目的そのもの。
+// 下段からスコア表示が消えたぶんがパッドに回っていなければ、移した意味がない。
+// バナー（実機で50〜60px）を引いても、指で操作するのに十分な高さが残ること。
+const BANNER_PX = 60;
+check("操作パッドがゲーム画面より広い", geo.pad > geo.h,
+  `パッド ${geo.pad.toFixed(0)} / ゲーム画面 ${geo.h.toFixed(0)}`);
+check("バナーを置いてもパッドが残る", geo.pad - BANNER_PX > 200,
+  `バナー後 ${(geo.pad - BANNER_PX).toFixed(0)}px`);
 
 // ---- ステージ選択 ----
 section("ステージモード");

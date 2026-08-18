@@ -9,6 +9,12 @@
  *   1. 保存済みの記録を、ゲームが読む前に流し込む
  *   2. ゲームからの「広告を出して」を受けて、ネイティブの広告を出す
  *   3. ゲームからの「これを保存して」を受けて、AsyncStorage に写す
+ *   4. 画面のいちばん上にバナーを出す
+ *
+ * バナーを**最上部**に置いているのは、そこだけが指の来ない場所だから。
+ * 操作パッドは画面の下半分にあって、親指はその中で動く。
+ * パッドの近くに置くと誤タップが増え、Google に無効なトラフィックと
+ * 判断されてアカウントごと止まりうる。単価より先に守るものがそこにある。
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -35,6 +41,13 @@ interface Incoming {
 export default function App() {
   const web = useRef<WebView>(null);
   const [seeded, setSeeded] = useState<store.Saved | null>(null);
+  /**
+   * バナーは広告の初期化が済んでから出す。
+   * 起動していきなり広告が出ていると、何のアプリか分かる前に判断されてしまう。
+   * 初期化は1回遊び終えたあと（web 側の finishRun）なので、
+   * バナーが現れるのは最初のリザルト画面が出ている最中——ゲーム中には動かない。
+   */
+  const [bannerOn, setBannerOn] = useState(false);
 
   // 保存済みの記録を読む。読み終わるまで WebView を作らない——
   // ゲームは起動時に同期で記録を読むので、間に合わせるにはこの順でないと駄目。
@@ -80,7 +93,10 @@ export default function App() {
 
       switch (msg.t) {
         case "ads:init":
-          void ads.init().then((ok) => reply(msg.id, ok));
+          void ads.init().then((ok) => {
+            if (ok) setBannerOn(true);
+            reply(msg.id, ok);
+          });
           break;
         case "ads:rewarded":
           void ads.showRewarded().then((earned) => reply(msg.id, earned));
@@ -110,6 +126,15 @@ export default function App() {
   return (
     <View style={styles.root}>
       <StatusBar hidden />
+      {bannerOn && (
+        <View style={styles.banner}>
+          <ads.BannerAd
+            unitId={ads.BANNER_UNIT}
+            size={ads.BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
+            requestOptions={ads.bannerRequest()}
+          />
+        </View>
+      )}
       <WebView
         ref={web}
         style={styles.web}
@@ -141,4 +166,5 @@ export default function App() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: INK },
   web: { flex: 1, backgroundColor: GRAVEL },
+  banner: { alignItems: "center", backgroundColor: INK },
 });
