@@ -5,29 +5,28 @@
  * 何回に1回出すかといった方針は web 側（`src/ads.ts`）にある——
  * 遊びの都合なので、遊びのコードと同じ場所に置きたい。
  *
- * **Expo Go では動かない。** ネイティブモジュールなので、
- * `eas build --profile development` で作った Dev Client が要る。
- * Expo Go でもゲームそのものは遊べる（広告が出ないだけ）。
+ * **Expo Go では広告モジュールそのものが入っていない。**
+ * だから型だけを `import type` で取り（コンパイル時に消える）、
+ * 実体は init() の中で require する。
+ * これを上で普通に import すると、**Expo Go は起動した瞬間に落ちる。**
+ * Expo Go でゲームを触れることのほうが、広告より優先度が高い。
  */
 
-import mobileAds, {
-  AdEventType,
-  AdsConsent,
-  AdsConsentStatus,
-  InterstitialAd,
-  MaxAdContentRating,
-  RewardedAd,
-  RewardedAdEventType,
-  TestIds,
+import type {
+  AdEventType as AdEventTypeT,
+  InterstitialAd as InterstitialAdT,
+  RewardedAd as RewardedAdT,
 } from "react-native-google-mobile-ads";
 
-export { BannerAd, BannerAdSize } from "react-native-google-mobile-ads";
+/** 実体。Expo Go では最後まで null のまま。 */
+type Sdk = typeof import("react-native-google-mobile-ads");
+let sdk: Sdk | null = null;
 
 /**
  * 広告ユニットID。
  *
- * 開発中は Google のテストIDを使う（`TestIds`）。
- * **本番のIDは AdMob の管理画面で作って下の定数に入れる。**
+ * 差し替えるまでは Google のテストIDで動く（`TestIds`）。
+ * **本番のIDは AdMob の管理画面で作って、ここを置き換える。**
  *
  * 自分の端末で実IDの広告を触ると、Google に無効なトラフィックとみなされて
  * アカウントごと停止されることがある。動作確認は必ずテストIDで。
@@ -42,44 +41,46 @@ const REAL_UNITS = {
    *
    * **置き場所を画面の最上部に決めたのは、そこだけが指の来ない場所だから。**
    * 操作パッドは画面の下半分にあり、親指はその中で動く。
-   * バナーをパッドの近くに置くと、誤タップが増える。
-   * 誤タップは Google に無効なトラフィックと判断され、
-   * 最悪アカウントごと止まる——単価より先に守るべきものがそこにある。
+   * パッドの近くに置くと誤タップが増え、Google に無効なトラフィックと
+   * 判断されてアカウントごと止まりうる。単価より先に守るものがそこにある。
    */
   banner: "ca-app-pub-0000000000000000/0000000000",
 };
 
 /** 差し替え前のダミーかどうか。ダミーのあいだはテストIDで動かす。 */
 const PLACEHOLDER = /^ca-app-pub-0{16}/;
-const useTest = __DEV__ || PLACEHOLDER.test(REAL_UNITS.rewarded);
+export const USING_TEST_ADS = __DEV__ || PLACEHOLDER.test(REAL_UNITS.rewarded);
 
-const UNITS = {
-  rewarded: useTest ? TestIds.REWARDED : REAL_UNITS.rewarded,
-  interstitial: useTest ? TestIds.INTERSTITIAL : REAL_UNITS.interstitial,
-  banner: useTest ? TestIds.ADAPTIVE_BANNER : REAL_UNITS.banner,
-};
-
-export const BANNER_UNIT = UNITS.banner;
-
-/** バナーの広告リクエスト設定。同意が取れていなければパーソナライズしない。 */
-export function bannerRequest(): { requestNonPersonalizedAdsOnly: boolean } {
-  return { requestNonPersonalizedAdsOnly: npa };
+function unit(kind: keyof typeof REAL_UNITS): string {
+  if (!sdk) return "";
+  if (!USING_TEST_ADS) return REAL_UNITS[kind];
+  const t = sdk.TestIds;
+  return kind === "rewarded" ? t.REWARDED : kind === "interstitial" ? t.INTERSTITIAL : t.ADAPTIVE_BANNER;
 }
-
-export const USING_TEST_ADS = useTest;
 
 let started = false;
 let npa = true;
 
-let rewarded: RewardedAd | null = null;
+let rewarded: RewardedAdT | null = null;
 let rewardedLoaded = false;
-let interstitial: InterstitialAd | null = null;
+let interstitial: InterstitialAdT | null = null;
 let interstitialLoaded = false;
 
 /** リワードの読み込み状態が変わったら web 側へ知らせる（ボタンの出し分けに使う）。 */
 let onReadyChange: (ready: boolean) => void = () => {};
 export function setReadyListener(fn: (ready: boolean) => void): void {
   onReadyChange = fn;
+}
+
+/** バナーを描くのに要るもの。Expo Go では null（＝バナーは出ない）。 */
+export function banner(): { Ad: Sdk["BannerAd"]; size: string; unitId: string; npa: boolean } | null {
+  if (!sdk || !started) return null;
+  return {
+    Ad: sdk.BannerAd,
+    size: sdk.BannerAdSize.ANCHORED_ADAPTIVE_BANNER,
+    unitId: unit("banner"),
+    npa,
+  };
 }
 
 /**
@@ -89,25 +90,34 @@ export function setReadyListener(fn: (ready: boolean) => void): void {
 export async function init(): Promise<boolean> {
   if (started) return true;
   try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    sdk = require("react-native-google-mobile-ads") as Sdk;
+  } catch {
+    return false; // Expo Go。広告なしで遊べればよい
+  }
+  const S = sdk;
+  if (!S?.default) return false;
+
+  try {
     try {
-      const info = await AdsConsent.requestInfoUpdate();
-      if (info.isConsentFormAvailable && info.status === AdsConsentStatus.REQUIRED) {
-        const after = await AdsConsent.showForm();
-        npa = after.status !== AdsConsentStatus.OBTAINED;
+      const info = await S.AdsConsent.requestInfoUpdate();
+      if (info.isConsentFormAvailable && info.status === S.AdsConsentStatus.REQUIRED) {
+        const after = await S.AdsConsent.showForm();
+        npa = after.status !== S.AdsConsentStatus.OBTAINED;
       } else {
-        npa = info.status === AdsConsentStatus.REQUIRED;
+        npa = info.status === S.AdsConsentStatus.REQUIRED;
       }
     } catch {
       npa = true;
     }
 
-    await mobileAds().setRequestConfiguration({
+    await S.default().setRequestConfiguration({
       // 4+ のゲームなので、広告の中身も全年齢向けに制限する。
       // ここを緩めると単価は上がるが、審査で問題になりうる内容が混ざる。
-      maxAdContentRating: MaxAdContentRating.G,
+      maxAdContentRating: S.MaxAdContentRating.G,
       tagForUnderAgeOfConsent: false,
     });
-    await mobileAds().initialize();
+    await S.default().initialize();
 
     started = true;
     loadRewarded();
@@ -120,16 +130,18 @@ export async function init(): Promise<boolean> {
 }
 
 function loadRewarded(): void {
+  if (!sdk) return;
+  const S = sdk;
   rewardedLoaded = false;
   onReadyChange(false);
-  rewarded = RewardedAd.createForAdRequest(UNITS.rewarded, {
+  rewarded = S.RewardedAd.createForAdRequest(unit("rewarded"), {
     requestNonPersonalizedAdsOnly: npa,
   });
-  rewarded.addAdEventListener(RewardedAdEventType.LOADED, () => {
+  rewarded.addAdEventListener(S.RewardedAdEventType.LOADED, () => {
     rewardedLoaded = true;
     onReadyChange(true);
   });
-  rewarded.addAdEventListener(AdEventType.ERROR, () => {
+  rewarded.addAdEventListener(S.AdEventType.ERROR as AdEventTypeT.ERROR, () => {
     rewardedLoaded = false;
     onReadyChange(false);
   });
@@ -137,14 +149,16 @@ function loadRewarded(): void {
 }
 
 function loadInterstitial(): void {
+  if (!sdk) return;
+  const S = sdk;
   interstitialLoaded = false;
-  interstitial = InterstitialAd.createForAdRequest(UNITS.interstitial, {
+  interstitial = S.InterstitialAd.createForAdRequest(unit("interstitial"), {
     requestNonPersonalizedAdsOnly: npa,
   });
-  interstitial.addAdEventListener(AdEventType.LOADED, () => {
+  interstitial.addAdEventListener(S.AdEventType.LOADED, () => {
     interstitialLoaded = true;
   });
-  interstitial.addAdEventListener(AdEventType.ERROR, () => {
+  interstitial.addAdEventListener(S.AdEventType.ERROR, () => {
     interstitialLoaded = false;
   });
   interstitial.load();
@@ -156,7 +170,8 @@ function loadInterstitial(): void {
  */
 export function showRewarded(): Promise<boolean> {
   const ad = rewarded;
-  if (!started || !ad || !rewardedLoaded) return Promise.resolve(false);
+  const S = sdk;
+  if (!started || !ad || !S || !rewardedLoaded) return Promise.resolve(false);
 
   return new Promise<boolean>((resolve) => {
     let earned = false;
@@ -168,11 +183,11 @@ export function showRewarded(): Promise<boolean> {
       loadRewarded(); // 次のぶんを用意する
     };
 
-    ad.addAdEventListener(RewardedAdEventType.EARNED_REWARD, () => {
+    ad.addAdEventListener(S.RewardedAdEventType.EARNED_REWARD, () => {
       earned = true;
     });
-    ad.addAdEventListener(AdEventType.CLOSED, finish);
-    ad.addAdEventListener(AdEventType.ERROR, finish);
+    ad.addAdEventListener(S.AdEventType.CLOSED, finish);
+    ad.addAdEventListener(S.AdEventType.ERROR, finish);
 
     try {
       ad.show();
@@ -185,7 +200,8 @@ export function showRewarded(): Promise<boolean> {
 /** 全画面広告を見せる。読み込めていなければ何もしない。 */
 export function showInterstitial(): Promise<boolean> {
   const ad = interstitial;
-  if (!started || !ad || !interstitialLoaded) {
+  const S = sdk;
+  if (!started || !ad || !S || !interstitialLoaded) {
     if (started) loadInterstitial();
     return Promise.resolve(false);
   }
@@ -198,8 +214,8 @@ export function showInterstitial(): Promise<boolean> {
       resolve(shown);
       loadInterstitial();
     };
-    ad.addAdEventListener(AdEventType.CLOSED, () => finish(true));
-    ad.addAdEventListener(AdEventType.ERROR, () => finish(false));
+    ad.addAdEventListener(S.AdEventType.CLOSED, () => finish(true));
+    ad.addAdEventListener(S.AdEventType.ERROR, () => finish(false));
     try {
       ad.show();
     } catch {

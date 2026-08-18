@@ -123,15 +123,18 @@ export default function App() {
   // WebView の localStorage が使えない場合でも読めるようにするため。
   const before = `window.__mtd_saved = ${JSON.stringify(seeded)}; true;`;
 
+  // Expo Go では広告モジュールが無いので null。バナーは出ないが、ゲームは動く。
+  const banner = ads.banner();
+
   return (
     <View style={styles.root}>
       <StatusBar hidden />
-      {bannerOn && (
+      {bannerOn && banner && (
         <View style={styles.banner}>
-          <ads.BannerAd
-            unitId={ads.BANNER_UNIT}
-            size={ads.BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
-            requestOptions={ads.bannerRequest()}
+          <banner.Ad
+            unitId={banner.unitId}
+            size={banner.size}
+            requestOptions={{ requestNonPersonalizedAdsOnly: banner.npa }}
           />
         </View>
       )}
