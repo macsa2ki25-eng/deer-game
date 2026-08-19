@@ -78,6 +78,10 @@ export const sfx = {
   graze(big: boolean): void {
     tone(big ? 1200 : 900, 0.05, big ? 0.07 : 0.035, big ? 1800 : 1300);
   },
+  /** 跳んだ。上がる音にして、燃料が減ったことも耳で分かるようにする。 */
+  jump(): void {
+    tone(420, 0.11, 0.06, 900);
+  },
   /** フンを踏んだ。 */
   squish(): void {
     noise(0.17, 0.14, 1400, 180);

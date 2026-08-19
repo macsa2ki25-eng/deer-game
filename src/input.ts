@@ -19,6 +19,8 @@ export interface InputState {
   ty: number | null;
   /** パッドに触れているか。 */
   touching: boolean;
+  /** 押された1フレームだけ true。game.ts が読んだら消える。 */
+  jump: boolean;
   /** パッド上の指の位置 0〜1。マーカー表示用。 */
   padU: number;
   padV: number;
@@ -44,7 +46,7 @@ export interface InputOptions {
 export function attachInput(pad: HTMLElement, opts: InputOptions): InputState {
   const st: InputState = {
     left: false, right: false, up: false, down: false,
-    tx: null, ty: null, touching: false, padU: 0.5, padV: 0.5,
+    tx: null, ty: null, touching: false, jump: false, padU: 0.5, padV: 0.5,
   };
   let firstDone = false;
 

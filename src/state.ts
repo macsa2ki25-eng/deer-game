@@ -63,6 +63,13 @@ export interface Tree {
   y: number;
 }
 
+/** 落ちている新しいくつ。拾うと汚れが1減る。 */
+export interface Shoe {
+  x: number;
+  y: number;
+  taken: boolean;
+}
+
 /** 撒かれたせんべい。鹿がここへ殺到する。 */
 export interface Bait {
   x: number;
@@ -123,6 +130,10 @@ export interface State {
 
   inv: number;
   stun: number;
+  /** 跳んでいる残り時間[s]。0より大きいあいだ、フンだけをすり抜ける。 */
+  air: number;
+  /** ジャンプの燃料 0〜1。使うと減り、時間で戻る。 */
+  jumpFuel: number;
   slip: number;
   knockback: number;
 
@@ -148,6 +159,7 @@ export interface State {
   deerTimer: number;
   touristTimer: number;
   stallTimer: number;
+  shoeTimer: number;
   sceneTimer: number;
   restShown: number;
 
@@ -156,6 +168,7 @@ export interface State {
   stalls: Stall[];
   trees: Tree[];
   baits: Bait[];
+  shoes: Shoe[];
   deer: Deer[];
   tourists: Tourist[];
   warns: Warn[];
@@ -197,6 +210,8 @@ export function resetRun(s: State): void {
   s.py = C.PLAY_Y.bottom - 24;
   s.inv = 0;
   s.stun = 0;
+  s.air = 0;
+  s.jumpFuel = 1;
   s.slip = 0;
   s.knockback = 0;
   s.rowAcc = 0;
@@ -209,6 +224,7 @@ export function resetRun(s: State): void {
   s.deerTimer = 1.2;
   s.touristTimer = 3;
   s.stallTimer = C.STALL_INTERVAL_MIN;
+  s.shoeTimer = C.SHOE_INTERVAL_MIN;
   s.sceneTimer = C.FEEDING_SCENE_INTERVAL_MIN;
   s.restShown = 0;
   s.poops = [];
@@ -216,6 +232,7 @@ export function resetRun(s: State): void {
   s.stalls = [];
   s.trees = [];
   s.baits = [];
+  s.shoes = [];
   s.deer = [];
   s.tourists = [];
   s.warns = [];

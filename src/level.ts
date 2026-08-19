@@ -150,6 +150,22 @@ function placeTree(s: State): void {
 }
 
 /**
+ * 落ちている新しいくつ。拾うと汚れが1減る。
+ * **たまにしか出ない**ので、置く場所は選ぶ——いま歩けるところに出す。
+ */
+export function spawnShoe(s: State): void {
+  const live = R.widest(s.route);
+  const cx = live
+    ? live.a + Math.random() * Math.max(1, live.b - live.a)
+    : C.PATH.x0 + Math.random() * C.PATH_W;
+  s.shoes.push({
+    x: Math.max(C.PATH.x0, Math.min(C.PATH.x1 - C.SHOE_BOX.w, cx - C.SHOE_BOX.w / 2)),
+    y: BASE_Y - C.SHOE_BOX.h,
+    taken: false,
+  });
+}
+
+/**
  * 鹿せんべい売り場。
  * **これだけは必ず取りに行けるところに置く。**
  * 取れるかどうかが運になると、せんべいの駆け引きが成立しない。
@@ -204,6 +220,20 @@ function openRoute(s: State): void {
   const free = R.subtract(wholePath(), blockedSpans(s));
   // 到達可能集合。枝分かれや行き止まりの観測と、売り場・餌やり場の置き場所に使う。
   s.route = R.intersect(R.grow(s.route, reach), free);
+
+  // **保証を切ってある（C.SAFE_ROUTE = false）。**
+  // 何も取り除かないので、フンはただランダムに落ちているだけになる。
+  // 毎行かならず routeGap ぶんの隙間を残す以上、密度が上がれば
+  // そこだけ空いた筋＝回廊として見えてしまう。それが v0.10 の限界だった。
+  // 詰みかけた瞬間の逃げ道は、保証ではなくジャンプで持たせている。
+  if (!C.SAFE_ROUTE) {
+    // 到達範囲が尽きても地形は続く（そこはプレイヤーが自力でどうにかする場所）
+    if (!s.route.length) s.route = free;
+    const near = R.nearest(s.route, s.thread);
+    if (near !== null) s.thread = near;
+    s.repaired = false;
+    return;
+  }
 
   // 1行で動ける範囲の中に、体が収まる隙間があるか。
   const window: R.Span[] = [{ a: s.thread - reach, b: s.thread + reach }];

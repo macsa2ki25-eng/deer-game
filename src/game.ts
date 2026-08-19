@@ -2,7 +2,9 @@
 
 import * as C from "./config";
 import type { State, Deer } from "./state";
-import { spawnRow, scheduleDeer, hatchDeer, dropFromDeer, spawnStall, spawnFeedingScene } from "./level";
+import {
+  spawnRow, scheduleDeer, hatchDeer, dropFromDeer, spawnStall, spawnShoe, spawnFeedingScene,
+} from "./level";
 import { sfx } from "./audio";
 import type { InputState } from "./input";
 
@@ -243,6 +245,10 @@ function moveEntities(s: State, vpx: number, dt: number): void {
     s.stalls[i].y += vpx * dt;
     if (s.stalls[i].y > C.VIEW.h + 8) s.stalls.splice(i, 1);
   }
+  for (let i = s.shoes.length - 1; i >= 0; i--) {
+    s.shoes[i].y += vpx * dt;
+    if (s.shoes[i].y > C.VIEW.h + 8) s.shoes.splice(i, 1);
+  }
   for (let i = s.baits.length - 1; i >= 0; i--) {
     s.baits[i].y += vpx * dt;
     s.baits[i].life -= dt;
@@ -315,7 +321,11 @@ function resolvePoops(s: State): boolean {
     const size = p.big ? C.BIG_PELLET : C.PELLET;
     if (!overlap(gx, gy, gw, gh, p.x, p.y, size.w, size.h)) continue;
 
-    if (s.inv <= 0 && overlap(hx, hy, C.PLAYER.hitW, C.PLAYER.hitH, p.x, p.y, size.w, size.h)) {
+    // 跳んでいるあいだはフンだけをすり抜ける。**鹿には当たる。**
+    // かすめ判定は生きているので、跳びながら稼ぐこともできる。
+    if (s.air <= 0
+      && s.inv <= 0
+      && overlap(hx, hy, C.PLAYER.hitW, C.PLAYER.hitH, p.x, p.y, size.w, size.h)) {
       s.poops.splice(i, 1);
       s.slip = C.SLIP_POOP;
       s.px += Math.random() < 0.5 ? -7 : 7;
@@ -389,6 +399,27 @@ function resolveStalls(s: State): void {
   }
 }
 
+/** 落ちているくつを拾う。汚れが1減る。満タンなら点だけ。 */
+function resolveShoes(s: State): void {
+  const cx = s.px + C.PLAYER.w / 2;
+  const cy = s.py + C.PLAYER.h / 2;
+  for (const sh of s.shoes) {
+    if (sh.taken) continue;
+    const dx = Math.abs(sh.x + C.SHOE_BOX.w / 2 - cx);
+    const dy = Math.abs(sh.y + C.SHOE_BOX.h / 2 - cy);
+    if (dx > C.SHOE_REACH || dy > C.SHOE_REACH) continue;
+    sh.taken = true;
+    s.score += C.SHOE_SCORE * s.mult;
+    sfx.pickup();
+    if (s.dirt > 0) {
+      s.dirt--;
+      banner(s, "あたらしい くつ", 1.4);
+    } else {
+      banner(s, "くつは まだきれい", 1.2);
+    }
+  }
+}
+
 // ---------------------------------------------------------------- 本体
 
 export function step(s: State, input: InputState, dt: number): void {
@@ -410,6 +441,14 @@ export function step(s: State, input: InputState, dt: number): void {
       const note = C.levelNote(lv);
       banner(s, note ? `レベル ${lv} ／ ${note}` : `レベル ${lv}`, note ? 2.4 : 1.5);
       sfx.levelUp();
+    }
+  }
+
+  if (!C.inRest(s.dist)) {
+    s.shoeTimer -= dt;
+    if (s.shoeTimer <= 0) {
+      spawnShoe(s);
+      s.shoeTimer = C.SHOE_INTERVAL_MIN + Math.random() * (C.SHOE_INTERVAL_MAX - C.SHOE_INTERVAL_MIN);
     }
   }
 
@@ -450,6 +489,19 @@ export function step(s: State, input: InputState, dt: number): void {
   s.inv -= dt;
   s.stun -= dt;
   s.slip -= dt;
+
+  // ジャンプ。跳んでいるあいだは燃料が戻らない（押しっぱなしで浮けないように）。
+  s.air -= dt;
+  if (s.air <= 0) s.jumpFuel = Math.min(1, s.jumpFuel + C.JUMP_REGEN * dt);
+  if (input.jump) {
+    input.jump = false; // 押された1フレームぶんだけ効く
+    if (s.air <= 0 && s.stun <= 0 && s.jumpFuel >= C.JUMP_COST) {
+      s.air = C.JUMP_TIME;
+      s.jumpFuel -= C.JUMP_COST;
+      s.slip = 0;
+      sfx.jump();
+    }
+  }
   s.grazeGauge *= Math.exp(-C.GRAZE_DECAY * dt);
   s.mult = 1 + s.grazeGauge;
 
@@ -487,6 +539,7 @@ export function step(s: State, input: InputState, dt: number): void {
   }
 
   resolveStalls(s);
+  resolveShoes(s);
   if (resolvePoops(s)) return;
   if (resolveDeer(s)) return;
 

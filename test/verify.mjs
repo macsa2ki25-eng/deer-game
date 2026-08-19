@@ -85,7 +85,9 @@ window.__bot = (spec) => new Promise((done) => {
     squat: 0, trees: 0, stalls: 0, maxSenbei: 0, fed: 0, banners: [],
     sleepers: 0, scene: 0, herd: 0, maxSwarm: 0, baits: 0,
     maxSpans: 0, repairs: 0, narrowest: 999,
+    minFuel: 1, shoes: 0, healed: 0, jumps: 0,
   };
+  let lastDirt = 0;
   const mults = [];
   const t0 = performance.now();
 
@@ -97,58 +99,141 @@ window.__bot = (spec) => new Promise((done) => {
     return pick || { t: s.px + C.PLAYER.w / 2, route: s.route };
   };
 
-  /** いま足元にある隙間。鹿をよけるときも、ここから出ない。 */
-  const spanAt = (lag) => {
-    for (const r of lag.route) if (lag.t >= r.a && lag.t <= r.b) return r;
-    return null;
+  /**
+   * **画面に見えているフンから、空いている区間を出す。**
+   *
+   * 生成器の持っている到達可能集合を覗くのはやめた。保証を切った以上あれは
+   * 「たまたま残っている集合」でしかなく、人が見て判断できるものでもない。
+   * 人がやっているのは「少し先まで見て、空いている筋を選ぶ」——そう書く。
+   */
+  const lanesAhead = (px) => {
+    const hy = s.py + C.PLAYER.hitY;
+    const y0 = hy - px;
+    const y1 = hy + C.PLAYER.hitH;
+    const half = C.PLAYER.hitW / 2 + 1;
+    const cuts = [];
+    for (const p of s.poops) {
+      const w = p.big ? C.BIG_PELLET.w : C.PELLET.w;
+      const h = p.big ? C.BIG_PELLET.h : C.PELLET.h;
+      if (p.y + h < y0 || p.y > y1) continue;
+      cuts.push([p.x - half, p.x + w + half]);
+    }
+    for (const t of s.trees) {
+      if (t.y + C.TREE_BOX.hitY + C.TREE_BOX.hitH < y0 || t.y + C.TREE_BOX.hitY > y1) continue;
+      cuts.push([t.x + C.TREE_BOX.hitX - half, t.x + C.TREE_BOX.hitX + C.TREE_BOX.hitW + half]);
+    }
+    for (const d of s.deer) {
+      if (d.kind !== "sleeper") continue;
+      if (d.y + C.DEER_BOX.hitY + C.DEER_BOX.hitH < y0 || d.y + C.DEER_BOX.hitY > y1) continue;
+      cuts.push([d.x + C.DEER_BOX.hitX - half, d.x + C.DEER_BOX.hitX + C.DEER_BOX.hitW + half]);
+    }
+    cuts.sort((a, b) => a[0] - b[0]);
+    const out = [];
+    let at = C.PATH.x0 + C.PLAYER.hitW / 2;
+    const end = C.PATH.x1 - C.PLAYER.hitW / 2;
+    for (const [a, b] of cuts) {
+      if (a > at) out.push({ a: at, b: Math.min(a, end) });
+      at = Math.max(at, b);
+    }
+    if (at < end) out.push({ a: at, b: end });
+    return out.filter((r) => r.b > r.a);
   };
 
   /**
-   * 前方の鹿をよける。ただし**通れる隙間の中でだけ**動く。
-   * 隙間より鹿のほうが広ければよけられない——それは理不尽ではなく、難所。
+   * 「広くて、近い」隙間を選ぶ。遠回りは割に合わない。
+   * 拾い物（売り場・くつ）が前にあれば、そちらへ寄る隙間を優先する——人もそうする。
    */
-  const dodgeDeer = (want, lag) => {
+  const pick = (spans, me, widthPull, pullTo) => {
+    let best = null;
+    let bestScore = -Infinity;
+    for (const r of spans) {
+      const w = r.b - r.a;
+      const mid = (r.a + r.b) / 2;
+      const target = pullTo === null ? me : pullTo;
+      const aim = Math.max(r.a + 3, Math.min(r.b - 3, target));
+      let score = Math.min(w, 70) * widthPull - Math.abs(aim - me);
+      if (pullTo !== null) score -= Math.abs(aim - pullTo) * 1.2;
+      if (score > bestScore) { bestScore = score; best = { r, aim, mid }; }
+    }
+    return best;
+  };
+
+  /**
+   * 前方にある拾い物。いちばん近いものの { x, ahead }。無ければ null。
+   * **既定では見に行かない。** 拾い物を取りに行くと寄り道のぶん踏むので、
+   * 「上手く歩けているか」を測る走行に混ぜると、比べているものがぼやける。
+   */
+  const wantItem = () => {
+    if (!spec.seekItems) return null;
+    let best = null;
+    let bestD = Infinity;
+    const consider = (x, w, y) => {
+      const ahead = s.py - y;
+      if (ahead < -10 || ahead > 150) return;
+      if (ahead < bestD) { bestD = ahead; best = { x: x + w / 2, ahead }; }
+    };
+    for (const st of s.stalls) if (!st.taken) consider(st.x, C.STALL_BOX.w, st.y);
+    for (const sh of s.shoes) if (!sh.taken) consider(sh.x, C.SHOE_BOX.w, sh.y);
+    return best;
+  };
+
+  /**
+   * 前方の鹿をよける。よけ切れないなら、そのまま行く（そこは難所）。
+   */
+  const dodgeDeer = (want) => {
     let out = want;
     for (const d of s.deer) {
       const ahead = s.py - d.y;
       if (ahead < -12 || ahead > 70) continue;
       const dx = d.x + C.DEER_BOX.w / 2 - out;
       if (Math.abs(dx) > 15) continue;
-      out += dx > 0 ? -20 : 20;
+      out += dx > 0 ? -22 : 22;
     }
-    // よける必要が無いなら1本のまま。ここで無条件に隙間へ丸めていて、
-    // 鹿が1頭もいない検査でも1本から押し出されていた。
-    if (out === want) return want;
-    const here = spanAt(lag);
-    if (!here) return want;
-    const lo = here.a + 6;
-    const hi = here.b - 6;
-    if (hi <= lo) return want;   // よける余地が無い。難所として受ける
-    return Math.max(lo, Math.min(hi, out));
+    return Math.max(C.PATH.x0 + 8, Math.min(C.PATH.x1 - 8, out));
   };
 
   const steers = {
-    /** 通り抜けられる1本をたどりつつ、前の鹿はよける。上手い人の走り方。 */
-    route: (lag) => dodgeDeer(lag.t, lag),
-    /** 同じ道を、真ん中ではなく縁ぎりぎりで通る。稼げるが踏む。 */
-    graze: (lag, t) => {
-      let here = null;
-      for (const r of lag.route) if (lag.t >= r.a && lag.t <= r.b) here = r;
-      const half = here ? Math.max(0, Math.min(14, (here.b - here.a) / 2 - 5)) : 0;
-      return lag.t + (Math.sin(t * 0.7) < 0 ? -half : half);
+    /** 上手い人の走り方。少し先まで見て、広くて近い隙間へ。 */
+    route: () => {
+      const me = s.px + C.PLAYER.w / 2;
+      const item = wantItem();
+      // すぐそこまで来た拾い物へは、隙間の都合を捨ててまっすぐ向かう。
+      // 人も「あと少しで届く」なら多少踏んでも取りに行く。
+      if (item && item.ahead < 80) return dodgeDeer(item.x);
+      const got = pick(lanesAhead(44), me, 0.6, item ? item.x : null);
+      return dodgeDeer(got ? got.aim : me);
+    },
+    /** いま足元だけを見て、いちばん広いところへ行く。先を見ない。 */
+    wide: () => {
+      const me = s.px + C.PLAYER.w / 2;
+      const got = pick(lanesAhead(6), me, 3, null);
+      return got ? got.mid : me;
     },
     /**
-     * **いちばん広く空いて見えるところ**へ行く。先のことは見ない。
-     * この設計だと「広い＝続く」ではないので、たいてい詰まる。
-     * 回廊時代の「見せかけの道」に当たるものが、作り物ではなく勝手に生まれている。
+     * 攻めた走り方。**通れるいちばん細い隙間を選ぶ。**
+     *
+     * この設計では「縁を舐める」が攻めではなかった。
+     * 広い隙間の縁に寄っても、かすめる壁は片側だけ。
+     * 逆に細い隙間を選ぶと**両側の壁をかすめる**ので、稼ぎも危険も上がる。
+     * 実測で、縁寄せは 0.54／真ん中は 0.68 グレイズ/m と逆転していた。
+     * 塊のあいだを縫う——テーマとも合っている。
      */
-    wide: (lag) => {
+    graze: () => {
+      const me = s.px + C.PLAYER.w / 2;
       let best = null;
-      for (const r of lag.route) if (!best || r.b - r.a > best.b - best.a) best = r;
-      return best ? (best.a + best.b) / 2 : lag.t;
+      let bestScore = Infinity;
+      for (const r of lanesAhead(44)) {
+        const w = r.b - r.a;
+        if (w < C.PLAYER.hitW + 3) continue;
+        const mid = (r.a + r.b) / 2;
+        const score = w + Math.abs(mid - me) * 0.35;
+        if (score < bestScore) { bestScore = score; best = r; }
+      }
+      if (!best) return me;
+      return dodgeDeer((best.a + best.b) / 2);
     },
     /** 何も見ずに振る。 */
-    blind: (lag, t) => lag.t + Math.sin(t * 2.2) * 40,
+    blind: (t) => (C.PATH.x0 + C.PATH.x1) / 2 + Math.sin(t * 2.2) * 60,
   };
 
   const tick = () => {
@@ -164,6 +249,12 @@ window.__bot = (spec) => new Promise((done) => {
       });
       return;
     }
+
+    // くつを拾うと汚れが減る。減るのはそれだけなので、減った回数＝拾えた回数。
+    if (s.dirt < lastDirt) seen.healed++;
+    lastDirt = s.dirt;
+    seen.minFuel = Math.min(seen.minFuel, s.jumpFuel);
+    seen.shoes = Math.max(seen.shoes, s.shoes.length);
 
     if (spec.immortal) s.dirt = 0;
     if (spec.noDeer) { s.deer.length = 0; s.warns.length = 0; s.deerTimer = 9; }
@@ -191,7 +282,20 @@ window.__bot = (spec) => new Promise((done) => {
     seen.fed = Math.max(seen.fed, s.fed);
     if (s.bannerT > 0 && s.banner && !seen.banners.includes(s.banner)) seen.banners.push(s.banner);
 
-    const want = steers[spec.steer](lagged(), t);
+    // 目の前にフンがあれば跳ぶ。**保証を切った代わりの逃げ道**なので、
+    // これが効かないと詰む場面がそのまま理不尽になる。
+    if (spec.jump && s.air <= 0 && s.jumpFuel >= C.JUMP_COST) {
+      const hx = s.px + C.PLAYER.hitX;
+      const hy = s.py + C.PLAYER.hitY;
+      const soon = s.poops.some((p) => {
+        const w = p.big ? C.BIG_PELLET.w : C.PELLET.w;
+        return p.x < hx + C.PLAYER.hitW + 2 && p.x + w > hx - 2
+          && p.y < hy && p.y > hy - 26;
+      });
+      if (soon) { M.input.jump = true; seen.jumps++; }
+    }
+
+    const want = steers[spec.steer](t);
     // **tx と ty は両方揃わないと1ミリも動かない**（game.ts の条件が && ）。
     // ty を忘れていて、ボットが突っ立ったまま踏まれ続けていた。
     if (Number.isFinite(want)) {
@@ -208,7 +312,11 @@ async function drive(page, seconds, steer, opts = {}) {
   await page.evaluate(BOT);
   return page.evaluate(
     (spec) => window.__bot(spec),
-    { seconds, steer, noDeer: !!opts.noDeer, immortal: !!opts.immortal },
+    {
+      seconds, steer,
+      noDeer: !!opts.noDeer, immortal: !!opts.immortal,
+      jump: !!opts.jump, seekItems: !!opts.seekItems,
+    },
   );
 }
 
@@ -285,7 +393,7 @@ const grazeRoute = (s, lag, t) => {
 
 await page.locator("#stage-list .stage-btn").first().click();
 await page.waitForTimeout(200);
-const stage1 = await drive(page, 40, "route");
+const stage1 = await drive(page, 40, "route", { jump: true, seekItems: true });
 check("ステージ1をクリアできる", stage1.phase === "clear",
   `${stage1.progress.toFixed(0)}m / よごれ ${stage1.dirt} / フン被弾 ${stage1.poopHits}`);
 await page.waitForTimeout(300);
@@ -317,7 +425,7 @@ async function probe(seconds, progress, tweak = null) {
   await page.waitForTimeout(140);
   await page.evaluate((p) => { window.__mtd.state.progress = p; }, progress);
   if (tweak) await page.evaluate(tweak);
-  return drive(page, seconds, "route", { immortal: true });
+  return drive(page, seconds, "route", { immortal: true, seekItems: true, jump: true });
 }
 
 const lvUp = await probe(12, 95);
@@ -393,43 +501,73 @@ const relative = await (async () => {
 })();
 check("指を置き直してもワープしない", relative < 12, `ずれ ${relative.toFixed(1)}px`);
 
-// ---- 公平さ（ここが本丸） ----
-section("公平さ：どんな地形でも本当に通り抜けられるか");
+// ---- 保証を切ったあとの手ざわり（ここが本丸） ----
+
+/**
+ * 比べる走行は**全部おなじ長さで回す**（immortal＝汚れを毎フレーム0に戻す）。
+ * 早死にすると距離も回数も短くなり、「上手いから被弾が少ない」のか
+ * 「すぐ死んだから被弾が少ない」のか区別が付かなくなる。実際それで数字が揺れた。
+ * 生き残れるかどうかは、下の「走り切れる」で別に見る。
+ */
+const fair = { noDeer: true, jump: true, immortal: true };
+
+section("回廊はもう無い");
 await page.evaluate(() => window.__mtd.startEndless());
 await page.waitForTimeout(150);
-const corridor = await drive(page, 40, "route", { noDeer: true });
-check("残っている道を辿れば無傷で走り切れる", corridor.phase === "playing" && corridor.poopHits <= 1,
-  `${corridor.progress.toFixed(0)}m / フン被弾 ${corridor.poopHits}`);
+const corridor = await drive(page, 60, "route", fair);
 
-// ここから3つは、回廊を廃止した設計そのものの検査。
-// 枝分かれしないなら、それは結局1本道＝回廊と同じ。
-check("道は枝分かれする（1本道ではない）", corridor.maxSpans >= 2,
+// v0.11 で SAFE_ROUTE を false にした。塞がった行を開ける処理が
+// 一度でも走っていたら、それはまだ「必ず通れる道」を引いているということ。
+check("通り道の保証は切れている（1行も開けていない）", corridor.repairs === 0,
+  `開けた行 ${corridor.repairs}`);
+check("それでも道は枝分かれして続く", corridor.maxSpans >= 2,
   `同時に最大 ${corridor.maxSpans} 本`);
-// 一度も取り除いていないなら「置いてから通す」ではなく
-// 「最初から通れる量しか置いていない」ということ。
-check("塞がった行を取り除いて通している", corridor.repairs > 0,
-  `${corridor.repairs} 行`);
-check("縫うほど細い道も出る", corridor.narrowest < 40,
-  `いちばん細い隙間 ${corridor.narrowest.toFixed(0)}px`);
+
+await page.evaluate(() => window.__mtd.startEndless());
+await page.waitForTimeout(150);
+const alive = await drive(page, 40, "route", { noDeer: true, jump: true });
+// 保証が無いので被弾ゼロは主張できない。主張できるのは
+// 「見て選んで跳べば、40秒走り切れる」——理不尽ではない、まで。
+check("上手く歩けば走り切れる", alive.phase === "playing",
+  `${alive.progress.toFixed(0)}m / フン被弾 ${alive.poopHits}`);
+
+section("ジャンプ");
+await page.evaluate(() => window.__mtd.startEndless());
+await page.waitForTimeout(150);
+const nojump = await drive(page, 60, "route", { noDeer: true, immortal: true });
+check("ジャンプがあると踏まずに済む", nojump.poopHits > corridor.poopHits,
+  `跳ばない ${nojump.poopHits} / 跳ぶ ${corridor.poopHits}`);
+check("ジャンプは連発できない", corridor.minFuel < 0.99 && corridor.jumps > 3,
+  `${corridor.jumps} 回 / 燃料は最低 ${(corridor.minFuel * 100).toFixed(0)}%`);
+
+section("新しいくつ");
+// 出る間隔（42〜78秒）そのものは定数なので、ここで見たいのは
+// 「出たら拾えて、拾ったら汚れが戻るか」。待ち時間だけ縮めて確かめる。
+await page.evaluate(() => window.__mtd.startEndless());
+await page.waitForTimeout(150);
+await page.evaluate(() => {
+  const s = window.__mtd.state;
+  s.progress = 60; s.dist = 60; s.shoeTimer = 2; s.dirt = 2;
+});
+const shoes = await drive(page, 45, "route", { noDeer: true, jump: true, seekItems: true });
+check("新しいくつが落ちている", shoes.shoes > 0, `同時に最大 ${shoes.shoes} 足`);
+check("拾うと汚れが1もどる", shoes.healed > 0, `${shoes.healed} 回`);
 
 section("広く見えるほうが正解とはかぎらない");
 await page.evaluate(() => window.__mtd.startEndless());
 await page.waitForTimeout(150);
-const wide = await drive(page, 40, "wide", { noDeer: true });
-// 回廊時代は「見せかけの道」を人工的に並べていた。いまは作っていない——
-// それでも詰まるなら、行き止まりが地形から勝手に生まれているということ。
+const wide = await drive(page, 60, "wide", fair);
 check("いちばん広い隙間を選ぶと先で詰まる", wide.poopHits > corridor.poopHits,
   `被弾 ${wide.poopHits} 対 続く道 ${corridor.poopHits}`);
 
 section("攻めと守り");
 await page.evaluate(() => window.__mtd.startEndless());
 await page.waitForTimeout(150);
-const graze = await drive(page, 40, "graze", { noDeer: true });
-// 比べる相手は「続く道を普通に辿ったとき」。
-// wide は早死にして距離が短いぶん グレイズ/m が水増しされるので、基準にできない。
-check("縁を舐めるほうがよく稼げる", graze.perM > corridor.perM * 1.5,
-  `縁 ${graze.perM.toFixed(2)} / 続く道 ${corridor.perM.toFixed(2)} グレイズ/m`);
-check("そのぶん危ない", graze.poopHits >= corridor.poopHits + 2,
+const graze = await drive(page, 60, "graze", fair);
+check("細い隙間を選ぶほど稼げる", graze.perM > corridor.perM * 1.25,
+  `細い ${graze.perM.toFixed(2)} / 広い ${corridor.perM.toFixed(2)} グレイズ/m`
+  + `（倍率は ×${graze.mean.toFixed(2)} 対 ×${corridor.mean.toFixed(2)}）`);
+check("そのぶん危ない", graze.poopHits > corridor.poopHits,
   `被弾 ${graze.poopHits} 対 ${corridor.poopHits}`);
 check("倍率が意味のある値まで伸びる", graze.mean > 1.25,
   `平均 ×${graze.mean.toFixed(2)}`);

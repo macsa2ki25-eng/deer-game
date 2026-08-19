@@ -20,6 +20,8 @@ const padFinger = $<HTMLDivElement>("pad-finger");
 const padBody = $<HTMLDivElement>("pad-body");
 const screens = $<HTMLDivElement>("screens");
 const quitBtn = $<HTMLButtonElement>("quit");
+const jumpBtn = $<HTMLButtonElement>("jump");
+const jumpFuel = $<HTMLElement>("jump-fuel");
 
 // プレイ中の数字は全部ゲーム画面（canvas）の HUD に移した。
 // 下段のDOMに残るのは、操作パッドと、レベルアップの一言だけ。
@@ -51,6 +53,26 @@ const soundInput = $<HTMLInputElement>("sound");
 const touristInput = $<HTMLInputElement>("tourists");
 soundInput.checked = soundOn;
 touristInput.checked = state.touristsOn;
+
+/**
+ * ジャンプ。押した瞬間に効かせる（click だと指を離すまで待たされる）。
+ * 燃料が足りなければ何も起きない——押しても無音だと故障に見えるので、
+ * ボタンの色で残量が分かるようにしてある。
+ */
+for (const ev of ["pointerdown", "touchstart"] as const) {
+  jumpBtn.addEventListener(ev, (e) => {
+    e.preventDefault();
+    unlock();
+    input.jump = true;
+  }, { passive: false });
+}
+// キーボードでも跳べるようにしておく（ブラウザで調整するとき用）
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space" || e.code === "ArrowUp") {
+    e.preventDefault();
+    input.jump = true;
+  }
+});
 
 const input = attachInput(pad, {
   onFirstInput: unlock,
@@ -364,6 +386,11 @@ function frame(now: number): void {
 
   render(ctx, state, bg);
   updateMarkers();
+
+  const canJump = state.jumpFuel >= C.JUMP_COST;
+  jumpFuel.style.right = `${(1 - state.jumpFuel) * 100}%`;
+  jumpBtn.classList.toggle("ready", canJump);
+  jumpBtn.classList.toggle("empty", !canJump);
 
   const showBanner = state.bannerT > 0 && state.phase === "playing";
   el.banner.classList.toggle("show", showBanner);

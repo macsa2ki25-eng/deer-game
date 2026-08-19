@@ -110,6 +110,10 @@ export function render(ctx: CanvasRenderingContext2D, s: State, bg: HTMLCanvasEl
     ctx.drawImage(SPR.tree, Math.round(t.x), Math.round(t.y));
   }
 
+  for (const sh of s.shoes) {
+    ctx.drawImage(SPR.shoe, Math.round(sh.x), Math.round(sh.y));
+  }
+
   for (const b of s.baits) {
     ctx.drawImage(SPR.bait, Math.round(b.x), Math.round(b.y));
   }
@@ -142,7 +146,21 @@ export function render(ctx: CanvasRenderingContext2D, s: State, bg: HTMLCanvasEl
   const hidden = s.inv > 0 && Math.floor(s.inv * 14) % 2 === 0;
   if (!hidden) {
     const frame = Math.floor(s.walkAcc / 9) % 2;
-    ctx.drawImage(SPR.player[frame], Math.round(s.px), Math.round(s.py));
+    // ジャンプ。山なりに持ち上げて、足元に影を残す。
+    // 影を置かないと「浮いている」ではなく「小さくなった」に見える。
+    const t = s.air > 0 ? 1 - Math.abs(1 - (2 * (C.JUMP_TIME - s.air)) / C.JUMP_TIME) : 0;
+    const lift = Math.round(t * C.JUMP_LIFT);
+    if (lift > 0) {
+      ctx.fillStyle = "rgba(32,26,36,0.28)";
+      const sw = Math.round(C.PLAYER.hitW * (1 - t * 0.3));
+      ctx.fillRect(
+        Math.round(s.px + C.PLAYER.hitX + (C.PLAYER.hitW - sw) / 2),
+        Math.round(s.py + C.PLAYER.h - 3),
+        sw,
+        2,
+      );
+    }
+    ctx.drawImage(SPR.player[frame], Math.round(s.px), Math.round(s.py) - lift);
   }
 
   // 予兆。鹿が入ってくる辺で点滅する。

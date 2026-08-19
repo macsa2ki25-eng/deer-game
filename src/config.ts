@@ -18,7 +18,9 @@ export const VIEW = { w: 224, h: 176 } as const;
 export const TILE = 16;
 
 /** プレイヤーの当たり判定の半幅[px]。通り道の計算が PLAYER の定義より前に要る。 */
-export const BODY_HALF = 4;
+export const BODY_HALF = 5;
+/** プレイヤーの高さ[px]。PLAY_Y の計算が PLAYER の定義より前に要る。 */
+const PLAYER_H = 22;
 
 /**
  * ゲーム画面の上に足す HUD の高さ[px]。
@@ -44,7 +46,11 @@ export const PATH = { x0: 8, x1: 216 } as const;
 export const PATH_W = PATH.x1 - PATH.x0; // 208px = 13タイル
 
 /** プレイヤーが動ける縦範囲。 */
-export const PLAY_Y = { top: 20, bottom: 160 } as const;
+/**
+ * プレイヤーが動ける縦範囲。**下端は「足が画面から出ない」で決まる。**
+ * キャラを22px高にしたら、bottom 160 では足元が切れていた（160+22 > 176）。
+ */
+export const PLAY_Y = { top: 20, bottom: VIEW.h - PLAYER_H - 2 } as const;
 
 /** 鹿・フンが湧く画面外の y。 */
 export const ENTRY_Y = -18;
@@ -106,12 +112,11 @@ export function poopRate(dist: number): number {
   // 裾を長くしてある。時定数が短いと600m 付近で頭打ちになり、
   // それ以降なにも変化しなくなって「レベルが上がった感じ」が消える。
   //
-  // **実測してから大きく上げた。**
-  // 「フンはいっぱいあるのに簡単」と言われて画面の被覆率を測ったところ、
-  // 参道の面積のうちフンが乗っているのは **6%** しかなかった。
-  // 小さい粒が散っているので「まみれ」に見えていただけで、
-  // 実際には94%の地面がどこでも歩けた。数を増やすしかない。
-  return (1.3 + 3.4 * (1 - Math.exp(-dist / 700))) * WIDTH_K;
+  // 一度は大きく上げた（被覆率6%→35%）。ただしそれは
+  // **「安全な線を1本通す」保証とセット**の数字だった。
+  // 保証を外した v0.11 では、敷き詰めると単に理不尽になるので下げてある。
+  // ランダムに落ちているから面白いのであって、量ではない。
+  return (0.9 + 1.5 * (1 - Math.exp(-dist / 700))) * WIDTH_K;
 }
 
 /** 鹿の出現間隔 [s] */
@@ -186,13 +191,13 @@ export const PATTERN_WEIGHTS = { scatter: 0.45, cluster: 0.42, big: 0.13 } as co
  */
 export function clusterSize(dist: number): { min: number; max: number } {
   const t = 1 - Math.exp(-dist / 700);
-  return { min: Math.round(6 + 13 * t), max: Math.round(10 + 17 * t) };
+  return { min: Math.round(5 + 6 * t), max: Math.round(9 + 9 * t) };
 }
 export const CLUSTER_RX = 13;
 export const CLUSTER_RY = 9;
 export function scatterSize(dist: number): { min: number; max: number } {
   const t = 1 - Math.exp(-dist / 700);
-  return { min: Math.round(2 + 5 * t), max: Math.round(4 + 7 * t) };
+  return { min: Math.round(2 + 2 * t), max: Math.round(4 + 3 * t) };
 }
 export const SCATTER_SPREAD = 30;
 /** 粒を縦にどれだけばらけさせるか[±px]。1行(16px)を超えると回廊の保証が甘くなる。 */
@@ -238,6 +243,25 @@ export const POOPER_STOP = 0.75;
  */
 export const REACH_SAFETY = 0.35;
 
+/**
+ * **通り道の保証を使うかどうか。ここ1行で戻せる。**
+ *
+ * true  … 毎行「必ず通れる1本」を残す。塞がった行は物を取り除いて空ける
+ * false … 何も保証しない。フンはただランダムに落ちているだけ
+ *
+ * v0.11 で false にした。理由は、**保証した時点でそれは回廊だから**。
+ * v0.10 で「予約せず、置いたあとに残った隙間をたどる」形にしたが、
+ * 毎行 routeGap ぶんの隙間を必ず残す以上、密度が上がれば
+ * そこだけ空いた筋として見えてしまう。実際そう見えた。
+ *
+ * 代わりに**フンを減らした**。ランダムに落ちているから面白いのであって、
+ * 敷き詰めたうえで安全な線を通すのは、結局あの帯に戻る道だった。
+ * 詰んだ瞬間の逃げ道は、保証ではなく**ジャンプ**で持たせている。
+ *
+ * true に戻せば v0.10 の挙動がそのまま返る（route.ts も openRoute も残してある）。
+ */
+export const SAFE_ROUTE = false;
+
 export function reachPerRow(dist: number): number {
   return (REACH_SAFETY * LATERAL) / scrollSpeed(dist);
 }
@@ -258,6 +282,34 @@ export function reachPerRow(dist: number): number {
 export function routeGap(dist: number): number {
   return 32 - 7 * (1 - Math.exp(-dist / 900));
 }
+
+// ---- ジャンプ ----
+
+/**
+ * **フンだけを飛び越える。** 鹿にはぶつかる（跳んだくらいでは避けられない）。
+ * 保証を外した代わりの逃げ道なので、詰みかけた瞬間に確実に効いてほしい。
+ * ただし押しっぱなしで無敵になっては避けゲーが終わるので、燃料を持たせる。
+ */
+export const JUMP_TIME = 0.42;
+/** 1回の消費。満タンから3回。 */
+export const JUMP_COST = 1 / 3;
+/** 毎秒の回復。空から満タンまで約7秒。 */
+export const JUMP_REGEN = 0.145;
+/** 跳んでいるあいだ、絵をどれだけ持ち上げるか[px]。 */
+export const JUMP_LIFT = 11;
+
+// ---- 新しいくつ（回復） ----
+
+/**
+ * 拾うと汚れが1減る。**ほんとうにたまに**しか置かない。
+ * 頻繁に出ると「拾えば済む」ゲームになって、避ける緊張が消える。
+ */
+export const SHOE_INTERVAL_MIN = 42;
+export const SHOE_INTERVAL_MAX = 78;
+export const SHOE_BOX = { w: 11, h: 13 } as const;
+/** 拾う判定。絵よりだいぶ広く取る——取り逃しが別のミニゲームになると興ざめ。 */
+export const SHOE_REACH = 14;
+export const SHOE_SCORE = 300;
 
 /**
  * グレイズが成立する最小の隙間[px]。
@@ -413,14 +465,19 @@ export const LATERAL = 150;
 
 // ---- 当たり判定（見た目より小さく取ると避けゲーは気持ちよくなる） ----
 
-export const PLAYER = { w: 12, h: 16, hitX: 2, hitY: 10, hitW: 8, hitH: 6 } as const;
+/**
+ * プレイヤー。v0.11 で 12×16 から一回り大きくした。
+ * 参道208pxに対して12pxは小さすぎて、避けている実感が薄かった。
+ * 当たり判定は足元だけ、という方針は変えない（体でぶつかると理不尽になる）。
+ */
+export const PLAYER = { w: 16, h: 22, hitX: 3, hitY: 14, hitW: 10, hitH: 7 } as const;
 export const DEER_BOX = { w: 16, h: 18, hitX: 2, hitY: 8, hitW: 12, hitH: 10 } as const;
 export const PELLET = { w: 4, h: 4 } as const;
 export const BIG_PELLET = { w: 7, h: 7 } as const;
 
 // ---- グレイズ（フンのすぐそばを通る） ----
 
-export const GRAZE_PAD = 8;
+export const GRAZE_PAD = 5;
 export const GRAZE_GAIN_SMALL = 0.2;
 export const GRAZE_GAIN_BIG = 0.5;
 export const GRAZE_SCORE_SMALL = 30;
