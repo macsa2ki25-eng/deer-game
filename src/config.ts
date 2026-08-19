@@ -103,9 +103,12 @@ export function poopRate(dist: number): number {
   // 裾を長くしてある。時定数が短いと600m 付近で頭打ちになり、
   // それ以降なにも変化しなくなって「レベルが上がった感じ」が消える。
   //
-  // 見せかけの道を入れてから増やした。空けておく帯が3本になったぶん、
-  // 同じ量では参道がスカスカに見え、フンを避けている感じが薄れる。
-  return (1.15 + 1.7 * (1 - Math.exp(-dist / 1400))) * WIDTH_K;
+  // **実測してから大きく上げた。**
+  // 「フンはいっぱいあるのに簡単」と言われて画面の被覆率を測ったところ、
+  // 参道の面積のうちフンが乗っているのは **6%** しかなかった。
+  // 小さい粒が散っているので「まみれ」に見えていただけで、
+  // 実際には94%の地面がどこでも歩けた。数を増やすしかない。
+  return (1.3 + 3.4 * (1 - Math.exp(-dist / 700))) * WIDTH_K;
 }
 
 /** 鹿の出現間隔 [s] */
@@ -173,12 +176,21 @@ export function pooperShare(dist: number): number {
 
 /** 塊の種類の重み。実際の鹿のフンは、まとまって落ちているか散っているかのどちらか。 */
 export const PATTERN_WEIGHTS = { scatter: 0.45, cluster: 0.42, big: 0.13 } as const;
-export const CLUSTER_MIN = 8;
-export const CLUSTER_MAX = 12;
+/**
+ * 塊の粒数。**距離で増やす。**
+ * 定数のまま濃くしたら、ステージ1（難易度0m相当）がクリア不能になった。
+ * 序盤は小さな落とし物、奥に行くほど溜まった山、という増え方にする。
+ */
+export function clusterSize(dist: number): { min: number; max: number } {
+  const t = 1 - Math.exp(-dist / 700);
+  return { min: Math.round(6 + 13 * t), max: Math.round(10 + 17 * t) };
+}
 export const CLUSTER_RX = 13;
 export const CLUSTER_RY = 9;
-export const SCATTER_MIN = 2;
-export const SCATTER_MAX = 4;
+export function scatterSize(dist: number): { min: number; max: number } {
+  const t = 1 - Math.exp(-dist / 700);
+  return { min: Math.round(2 + 5 * t), max: Math.round(4 + 7 * t) };
+}
 export const SCATTER_SPREAD = 30;
 /** 粒を縦にどれだけばらけさせるか[±px]。1行(16px)を超えると回廊の保証が甘くなる。 */
 export const SCATTER_JITTER_Y = 6;
@@ -212,6 +224,10 @@ export const CORRIDOR_HALF_MAX = 20;
  * ただし毎行その上限を使うと余裕がゼロになり、
  * 「追いかけるだけで手一杯、避ける操作ができない」状態になる。
  * 実測（回廊を辿るボット）で破綻したので、実際に使うのはこの割合まで。
+ *
+ * 一度 0.5 まで上げてみたが、**回廊をなぞるボットが129mで3回踏んだ**。
+ * 回廊が速く動くと、追う側のわずかな遅れがそのまま縁への押し付けになる。
+ * 難しさは密度で作り、ここは触らない——「なぞれば無傷」は保証なので。
  */
 export const DRIFT_SAFETY = 0.35;
 
@@ -260,15 +276,17 @@ export const LANE_HALF_NOMINAL = CORRIDOR_HALF_MAX;
  * 帯の幅（14〜20px）そのままだと近すぎた。理由は2つ、どちらも実測で出た。
  *
  *  1. プレイヤーの判定の半幅4px + GRAZE_PAD 8px = 12px なので、
- *     粒が中心から14pxのところにあると、線から**2pxずれただけでかすめる**。
+ *     粒が中心から14pxのところにあると、線から2pxずれただけでかすめる。
  *     「安全に歩く」と「縁を舐める」が同じ稼ぎになり、攻守の分かれ目が消える
  *     （実測 0.33 対 0.28 グレイズ/m。狙いは倍以上の差）。
  *  2. 当たりは16pxずれた時点なので、なぞるだけで被弾が0〜3回に揺れた。
  *     「なぞれば無傷」は保証なので、揺れる時点で足りていない。
  *
- * 20にすると、中心±8pxは**かすめもしない安全地帯**になり、
- * ±8〜16pxが「かすめるが当たらない」帯、16px超で被弾。
- * 攻めるほど稼げて危ない、という三段になる。
+ * 20 と GRAZE_PAD 8 の組み合わせで、中心±8pxは**かすめもしない安全地帯**、
+ * ±8〜16pxが「かすめるが当たらない」帯、16px超で被弾、の三段になる。
+ *
+ * 一度 GRAZE_PAD を6に下げたら、かすめ帯が8px→6pxに痩せて
+ * 平均倍率が ×1.18 まで落ちた（合格ラインは1.25）。ここは連動している。
  */
 export const PELLET_CLEAR_MIN = 20;
 

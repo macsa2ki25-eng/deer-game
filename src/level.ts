@@ -132,7 +132,8 @@ const EDGE_MARGIN = 2;
 
 function placeCluster(s: State, yOffset: number): void {
   const lanes = allLanes(s);
-  const n = C.CLUSTER_MIN + Math.floor(Math.random() * (C.CLUSTER_MAX - C.CLUSTER_MIN + 1));
+  const size = C.clusterSize(s.dist);
+  const n = size.min + Math.floor(Math.random() * (size.max - size.min + 1));
   // 半分は帯から離して置く。縁ばかりを狙うと、どの塊も帯に食われて半月型になり、
   // 参道全体が薄くなる。離して置いた塊が「濃いところ」を作る。
   const cx = freeCentre(lanes, Math.random() < 0.5 ? EDGE_MARGIN : C.CLUSTER_RX);
@@ -151,7 +152,8 @@ function placeCluster(s: State, yOffset: number): void {
 
 function placeScatter(s: State, yOffset: number): void {
   const lanes = allLanes(s);
-  const n = C.SCATTER_MIN + Math.floor(Math.random() * (C.SCATTER_MAX - C.SCATTER_MIN + 1));
+  const size = C.scatterSize(s.dist);
+  const n = size.min + Math.floor(Math.random() * (size.max - size.min + 1));
   const cx = freeCentre(lanes, EDGE_MARGIN);
   if (cx === null) return;
   for (let i = 0; i < n; i++) {

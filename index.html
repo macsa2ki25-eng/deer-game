@@ -88,7 +88,10 @@
   button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
   button.ghost{background:none;color:var(--muted);border:1px solid var(--line);font-size:13px;padding:.55em 1.4em}
   .btn-row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
-  /* 動画を見て復活するボタン。押すのはプレイヤーの選択なので、勝手に出ない */
+  /* 動画を見て復活するボタン。押すのはプレイヤーの選択なので、勝手に出ない。
+     display を指定する要素には hidden が効かない（既定の display:none を上書きしてしまう）。
+     広告が読めていないのにボタンだけ出て、押しても何も起きない状態になっていた。 */
+  [hidden]{display:none !important}
   #btn-continue{background:var(--graze);color:#11140e;display:flex;align-items:center;gap:.5em}
   #btn-continue small{font-size:11px;font-weight:400;opacity:.75}
   .mode-btn{width:100%;max-width:300px;text-align:left;display:flex;flex-direction:column;gap:2px;padding:.9em 1.2em}
