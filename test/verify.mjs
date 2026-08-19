@@ -65,110 +65,151 @@ function section(title) {
 // ---------------------------------------------------------------- ボットの操縦
 
 /**
- * 回廊は「いま自分の足元に来ている行が生成されたときの位置」を追わないといけない。
- * 生成時点の値を追うと11行ぶん先の道を追うことになり、必ずフンを踏む。
+ * 操縦は**ページの中で 60Hz で回す**。
+ *
+ * 以前は Node 側から Playwright でマウスを動かしていたが、
+ * 往復が1周50〜80msあり、それがそのまま操作の遅れになっていた。
+ * つまり測っていたのは地形の公平さではなく**計測装置の遅さ**で、
+ * 同じ地形が「被弾5回」にも「被弾0回」にもなった。
+ *
+ * いまは目標位置だけを毎フレーム与える。移動速度は LATERAL のままなので、
+ * **本当の制約（速度上限）は残っている**。
+ * 指の相対操作そのものは「指を置き直してもワープしない」で別に見ている。
  */
-function makeCorridorTracker() {
+const BOT = `
+window.__bot = (spec) => new Promise((done) => {
+  const M = window.__mtd, C = M.config, s = M.state;
   const hist = [];
-  return (s) => {
-    hist.push({
-      sp: s.scrollPx, c: s.corridor, half: s.corridorHalf, decoys: s.decoys,
-      // フンが空いている距離。帯の幅とは別（config の PELLET_CLEAR_MIN）
-      pelletHalf: Math.max(s.corridorHalf, s.pelletClearMin),
-    });
-    if (hist.length > 700) hist.shift();
-    const want = s.scrollPx - (s.py + 16);
-    for (let i = hist.length - 1; i >= 0; i--) if (hist[i].sp <= want) return hist[i];
-    return hist[0];
-  };
-}
-
-async function drive(page, pad, reach, seconds, steer, opts = {}) {
-  const track = makeCorridorTracker();
-  const mults = [];
+  let lastRow = -1;
   const seen = {
-    squat: 0, trees: 0, stalls: 0, maxSenbei: 0, fed: 0, banners: new Set(),
-    sleepers: 0, scene: 0, herd: 0, maxSwarm: 0, baits: 0, decoys: 0,
+    squat: 0, trees: 0, stalls: 0, maxSenbei: 0, fed: 0, banners: [],
+    sleepers: 0, scene: 0, herd: 0, maxSwarm: 0, baits: 0,
+    maxSpans: 0, repairs: 0, narrowest: 999,
   };
-  // 操作は相対方式なので、目標の絶対位置ではなく「動かしたい差分」でマウスを動かす。
-  // パッドの端に来たら、人と同じように指を離して真ん中に置き直す。
-  const kx = (reach.x1 - reach.x0) / pad.width;
-  let mouseX = pad.x + pad.width / 2;
-  const mouseY = pad.y + pad.height * 0.82;
-  await page.mouse.move(mouseX, mouseY);
-  await page.mouse.down();
-  const t0 = Date.now();
-  let shot = false;
-  let last = null;
-  while (Date.now() - t0 < seconds * 1000) {
-    if (opts.immortal) {
-      // 要素が出るかどうかの検査なので、生存とは切り離す
-      await page.evaluate(() => { window.__mtd.state.dirt = 0; });
+  const mults = [];
+  const t0 = performance.now();
+
+  /** 足元の行が作られたときの thread。人が画面を見て選ぶのと同じ情報。 */
+  const lagged = () => {
+    const want = s.scrollPx - (s.py + C.PLAYER.hitY + C.PLAYER.hitH / 2);
+    let pick = hist[0];
+    for (let i = hist.length - 1; i >= 0; i--) if (hist[i].sp <= want) { pick = hist[i]; break; }
+    return pick || { t: s.px + C.PLAYER.w / 2, route: s.route };
+  };
+
+  /** いま足元にある隙間。鹿をよけるときも、ここから出ない。 */
+  const spanAt = (lag) => {
+    for (const r of lag.route) if (lag.t >= r.a && lag.t <= r.b) return r;
+    return null;
+  };
+
+  /**
+   * 前方の鹿をよける。ただし**通れる隙間の中でだけ**動く。
+   * 隙間より鹿のほうが広ければよけられない——それは理不尽ではなく、難所。
+   */
+  const dodgeDeer = (want, lag) => {
+    let out = want;
+    for (const d of s.deer) {
+      const ahead = s.py - d.y;
+      if (ahead < -12 || ahead > 70) continue;
+      const dx = d.x + C.DEER_BOX.w / 2 - out;
+      if (Math.abs(dx) > 15) continue;
+      out += dx > 0 ? -20 : 20;
     }
-    if (opts.noDeer) {
-      await page.evaluate(() => {
-        const s = window.__mtd.state;
-        s.deer.length = 0;
-        s.warns.length = 0;
-        s.deerTimer = 9;
+    // よける必要が無いなら1本のまま。ここで無条件に隙間へ丸めていて、
+    // 鹿が1頭もいない検査でも1本から押し出されていた。
+    if (out === want) return want;
+    const here = spanAt(lag);
+    if (!here) return want;
+    const lo = here.a + 6;
+    const hi = here.b - 6;
+    if (hi <= lo) return want;   // よける余地が無い。難所として受ける
+    return Math.max(lo, Math.min(hi, out));
+  };
+
+  const steers = {
+    /** 通り抜けられる1本をたどりつつ、前の鹿はよける。上手い人の走り方。 */
+    route: (lag) => dodgeDeer(lag.t, lag),
+    /** 同じ道を、真ん中ではなく縁ぎりぎりで通る。稼げるが踏む。 */
+    graze: (lag, t) => {
+      let here = null;
+      for (const r of lag.route) if (lag.t >= r.a && lag.t <= r.b) here = r;
+      const half = here ? Math.max(0, Math.min(14, (here.b - here.a) / 2 - 5)) : 0;
+      return lag.t + (Math.sin(t * 0.7) < 0 ? -half : half);
+    },
+    /**
+     * **いちばん広く空いて見えるところ**へ行く。先のことは見ない。
+     * この設計だと「広い＝続く」ではないので、たいてい詰まる。
+     * 回廊時代の「見せかけの道」に当たるものが、作り物ではなく勝手に生まれている。
+     */
+    wide: (lag) => {
+      let best = null;
+      for (const r of lag.route) if (!best || r.b - r.a > best.b - best.a) best = r;
+      return best ? (best.a + best.b) / 2 : lag.t;
+    },
+    /** 何も見ずに振る。 */
+    blind: (lag, t) => lag.t + Math.sin(t * 2.2) * 40,
+  };
+
+  const tick = () => {
+    const t = (performance.now() - t0) / 1000;
+    if (s.phase !== "playing" || t >= spec.seconds) {
+      const mean = mults.length ? mults.reduce((a, b) => a + b, 0) / mults.length : 0;
+      done({
+        phase: s.phase, progress: s.progress, score: s.score, dirt: s.dirt,
+        graze: s.grazeCount, poopHits: s.poopHits, deerHits: s.deerHits,
+        senbei: s.senbei, encircled: s.encircled, swarmCount: s.swarmCount,
+        ...seen, banners: seen.banners, mean,
+        perM: s.grazeCount / Math.max(1, s.progress),
       });
+      return;
     }
-    const s = await page.evaluate(() => {
-      const s = window.__mtd.state;
-      return {
-        phase: s.phase, progress: s.progress, level: s.level, score: s.score, dirt: s.dirt,
-        graze: s.grazeCount, mult: s.mult, poopHits: s.poopHits, deerHits: s.deerHits,
-        corridor: s.corridor, corridorHalf: s.corridorHalf, scrollPx: s.scrollPx,
-        decoys: s.decoys.map((d) => d.x),
-        pelletClearMin: window.__mtd.config.PELLET_CLEAR_MIN,
-        px: s.px, py: s.py, senbei: s.senbei, fed: s.fed,
-        trees: s.trees.length, stalls: s.stalls.length, baits: s.baits.length,
-        swarmCount: s.swarmCount,
-        squats: s.deer.filter((d) => d.squat > 0).length,
-        sleepers: s.deer.filter((d) => d.kind === "sleeper").length,
-        scene: s.deer.filter((d) => d.kind === "scene").length,
-        walkers: s.deer.filter((d) => d.kind === "walk" || d.kind === "homing").length,
-        banner: s.bannerT > 0 ? s.banner : "",
-      };
-    });
-    last = s;
-    if (s.phase !== "playing") break;
+
+    if (spec.immortal) s.dirt = 0;
+    if (spec.noDeer) { s.deer.length = 0; s.warns.length = 0; s.deerTimer = 9; }
+
+    const row = Math.floor(s.scrollPx / C.TILE);
+    if (row !== lastRow) {
+      lastRow = row;
+      hist.push({ sp: s.scrollPx, t: s.thread, route: s.route.map((r) => ({ a: r.a, b: r.b })) });
+      if (hist.length > 900) hist.shift();
+      seen.maxSpans = Math.max(seen.maxSpans, s.route.length);
+      if (s.repaired) seen.repairs++;
+      for (const r of s.route) seen.narrowest = Math.min(seen.narrowest, r.b - r.a);
+    }
+
     mults.push(s.mult);
-    if (s.squats > 0) seen.squat++;
-    seen.trees = Math.max(seen.trees, s.trees);
-    seen.sleepers = Math.max(seen.sleepers, s.sleepers);
-    seen.scene = Math.max(seen.scene, s.scene);
-    seen.herd = Math.max(seen.herd, s.walkers);
+    if (s.deer.some((d) => d.squat > 0)) seen.squat++;
+    seen.trees = Math.max(seen.trees, s.trees.length);
+    seen.sleepers = Math.max(seen.sleepers, s.deer.filter((d) => d.kind === "sleeper").length);
+    seen.scene = Math.max(seen.scene, s.deer.filter((d) => d.kind === "scene").length);
+    seen.herd = Math.max(seen.herd, s.deer.filter((d) => d.kind === "walk" || d.kind === "homing").length);
     seen.maxSwarm = Math.max(seen.maxSwarm, s.swarmCount);
-    seen.baits = Math.max(seen.baits, s.baits);
-    seen.decoys = Math.max(seen.decoys, s.decoys.length);
-    seen.stalls = Math.max(seen.stalls, s.stalls);
+    seen.baits = Math.max(seen.baits, s.baits.length);
+    seen.stalls = Math.max(seen.stalls, s.stalls.length);
     seen.maxSenbei = Math.max(seen.maxSenbei, s.senbei);
     seen.fed = Math.max(seen.fed, s.fed);
-    if (s.banner) seen.banners.add(s.banner);
+    if (s.bannerT > 0 && s.banner && !seen.banners.includes(s.banner)) seen.banners.push(s.banner);
 
-    const lag = track(s);
-    const targetX = steer(s, lag, (Date.now() - t0) / 1000);
-    const tx = await page.evaluate(() => window.__mtd.input.tx);
-    mouseX += (targetX - (tx ?? s.px)) / kx;
-    if (mouseX < pad.x + 6 || mouseX > pad.x + pad.width - 6) {
-      // 端まで来た。指を離して真ん中から続ける（相対方式なのでキャラは動かない）
-      await page.mouse.up();
-      mouseX = pad.x + pad.width / 2;
-      await page.mouse.move(mouseX, mouseY);
-      await page.mouse.down();
-    } else {
-      await page.mouse.move(mouseX, mouseY);
+    const want = steers[spec.steer](lagged(), t);
+    // **tx と ty は両方揃わないと1ミリも動かない**（game.ts の条件が && ）。
+    // ty を忘れていて、ボットが突っ立ったまま踏まれ続けていた。
+    if (Number.isFinite(want)) {
+      M.input.tx = want - C.PLAYER.w / 2;
+      M.input.ty = s.py;
     }
-    if (SHOTS && opts.shotName && !shot && Date.now() - t0 > 6000) {
-      shot = true;
-      await page.locator("#stage").screenshot({ path: `${SHOTS}/${opts.shotName}.png` });
-    }
-    await page.waitForTimeout(30);
-  }
-  await page.mouse.up();
-  const mean = mults.length ? mults.reduce((a, b) => a + b, 0) / mults.length : 0;
-  return { ...last, ...seen, mean, perM: last.graze / Math.max(1, last.progress) };
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+});
+`;
+
+async function drive(page, seconds, steer, opts = {}) {
+  await page.evaluate(BOT);
+  return page.evaluate(
+    (spec) => window.__bot(spec),
+    { seconds, steer, noDeer: !!opts.noDeer, immortal: !!opts.immortal },
+  );
 }
 
 // ---------------------------------------------------------------- 本体
@@ -220,26 +261,31 @@ check("エリア2以降はロック", (await page.locator("#area-list .area-btn.
 
 const pad = await page.locator("#pad").boundingBox();
 const reach = await page.evaluate(() => window.__mtd.reach);
-const followCorridor = (_s, lag) => lag.c - 6;
-
 /**
- * 「空いて見えるほう」を選んでしまった人の再現。
- * いちばん近い**見せかけの道**へ寄る（本物は選ばない）。偽物が1本も無いときだけ本物へ。
+ * 通り抜けられる1本（thread）をたどる。**上手い人の走り方。**
  *
- * 本物を混ぜて「近いほうを選ぶ」にすると、たまたま本物の上にいる走行では
- * 一度も騙されないまま終わり、測っているものが走行ごとに変わってしまう。
+ * 到達可能集合（route）のほうを追うと駄目だった。いま居る枝が
+ * 先で行き止まっても、足元の集合を見ているうちは分からない。
+ * 気づいた時にはもう戻れない——それは公平さの検査にならない。
  */
-const followDecoy = (s, lag) => {
-  const ds = lag.decoys ?? [];
-  if (!ds.length) return lag.c - 6;
-  let best = ds[0];
-  for (const x of ds) if (Math.abs(x - s.px) < Math.abs(best - s.px)) best = x;
-  return best - 6;
+const followRoute = (s, lag) => {
+  const t = lag.thread;
+  return (typeof t === "number" ? t : s.px + 6) - 6;
+};
+
+/** 同じ道を、真ん中ではなく縁ぎりぎりで通る。稼げるが踏む。 */
+const grazeRoute = (s, lag, t) => {
+  const spans = lag.route ?? [];
+  const mid = typeof lag.thread === "number" ? lag.thread : s.px + 6;
+  let here = null;
+  for (const r of spans) if (mid >= r.a && mid <= r.b) here = r;
+  const half = here ? Math.max(0, Math.min(14, (here.b - here.a) / 2 - 5)) : 0;
+  return mid + (Math.sin(t * 0.7) < 0 ? -half : half) - 6;
 };
 
 await page.locator("#stage-list .stage-btn").first().click();
 await page.waitForTimeout(200);
-const stage1 = await drive(page, pad, reach, 40, followCorridor);
+const stage1 = await drive(page, 40, "route");
 check("ステージ1をクリアできる", stage1.phase === "clear",
   `${stage1.progress.toFixed(0)}m / よごれ ${stage1.dirt} / フン被弾 ${stage1.poopHits}`);
 await page.waitForTimeout(300);
@@ -254,7 +300,7 @@ await page.click("#btn-back-title");
 await page.waitForTimeout(150);
 await page.click("#btn-endless");
 await page.waitForTimeout(200);
-const reckless = await drive(page, pad, reach, 60, (_s, lag, t) => lag.c - 6 + Math.sin(t * 2.2) * 40);
+const reckless = await drive(page, 60, "blind");
 check("下手に歩けば終わる", reckless.phase === "over", `${reckless.progress.toFixed(0)}m`);
 await page.waitForTimeout(300);
 check("ランキングに記録される", (await page.locator("#rank-list2 li").count()) >= 1);
@@ -271,11 +317,11 @@ async function probe(seconds, progress, tweak = null) {
   await page.waitForTimeout(140);
   await page.evaluate((p) => { window.__mtd.state.progress = p; }, progress);
   if (tweak) await page.evaluate(tweak);
-  return drive(page, pad, reach, seconds, followCorridor, { immortal: true, shotName: null });
+  return drive(page, seconds, "route", { immortal: true });
 }
 
 const lvUp = await probe(12, 95);
-check("レベルアップが画面に出る", lvUp.banners.size > 0, [...lvUp.banners].join(" / "));
+check("レベルアップが画面に出る", lvUp.banners.length > 0, lvUp.banners.join(" / "));
 
 const pooper = await probe(20, 250);
 check("鹿が道でフンをする", pooper.squat > 0, `しゃがんだフレーム ${pooper.squat}`);
@@ -348,36 +394,42 @@ const relative = await (async () => {
 check("指を置き直してもワープしない", relative < 12, `ずれ ${relative.toFixed(1)}px`);
 
 // ---- 公平さ（ここが本丸） ----
-section("公平さ：安全回廊は本当に通れるか");
+section("公平さ：どんな地形でも本当に通り抜けられるか");
 await page.evaluate(() => window.__mtd.startEndless());
 await page.waitForTimeout(150);
-const corridor = await drive(page, pad, reach, 40, followCorridor, { noDeer: true });
-check("回廊をなぞれば無傷で走り切れる", corridor.phase === "playing" && corridor.poopHits <= 1,
+const corridor = await drive(page, 40, "route", { noDeer: true });
+check("残っている道を辿れば無傷で走り切れる", corridor.phase === "playing" && corridor.poopHits <= 1,
   `${corridor.progress.toFixed(0)}m / フン被弾 ${corridor.poopHits}`);
 
-section("見せかけの道：絵だけでは本物が決まらないか");
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(150);
-const decoy = await drive(page, pad, reach, 40, followDecoy, { noDeer: true });
-check("本物と同じ幅の空いた帯が何本も出る", decoy.decoys >= 2, `同時に最大 ${decoy.decoys + 1} 本`);
-check("空いて見えるほうへ歩くと行き止まる", decoy.poopHits > corridor.poopHits,
-  `被弾 ${decoy.poopHits} 対 回廊 ${corridor.poopHits}`);
+// ここから3つは、回廊を廃止した設計そのものの検査。
+// 枝分かれしないなら、それは結局1本道＝回廊と同じ。
+check("道は枝分かれする（1本道ではない）", corridor.maxSpans >= 2,
+  `同時に最大 ${corridor.maxSpans} 本`);
+// 一度も取り除いていないなら「置いてから通す」ではなく
+// 「最初から通れる量しか置いていない」ということ。
+check("塞がった行を取り除いて通している", corridor.repairs > 0,
+  `${corridor.repairs} 行`);
+check("縫うほど細い道も出る", corridor.narrowest < 40,
+  `いちばん細い隙間 ${corridor.narrowest.toFixed(0)}px`);
 
+section("広く見えるほうが正解とはかぎらない");
 await page.evaluate(() => window.__mtd.startEndless());
 await page.waitForTimeout(150);
-// 縁を舐める線。
-//
-// 粒は中心から pelletHalf px のところから始まるので、
-// 「かすめるが踏まない」のは 中心から pelletHalf−12 〜 pelletHalf−4 px の帯。
-// **その帯の中に居続ける**のが上手いプレイヤーの走り方なので、そう動かす。
-// 中心をまたいで大きく振ると、安全地帯を通っている時間が長くなって
-// 稼ぎが薄まり、「安全に歩く」との差が測れない（実際そうなっていた）。
-const grazeLine = (_s, lag, t) =>
-  lag.c - 6 + (lag.pelletHalf - 8 + Math.sin(t * 3) * 3) * (Math.sin(t * 0.35) < 0 ? -1 : 1);
-const graze = await drive(page, pad, reach, 40, grazeLine, { noDeer: true });
+const wide = await drive(page, 40, "wide", { noDeer: true });
+// 回廊時代は「見せかけの道」を人工的に並べていた。いまは作っていない——
+// それでも詰まるなら、行き止まりが地形から勝手に生まれているということ。
+check("いちばん広い隙間を選ぶと先で詰まる", wide.poopHits > corridor.poopHits,
+  `被弾 ${wide.poopHits} 対 続く道 ${corridor.poopHits}`);
+
+section("攻めと守り");
+await page.evaluate(() => window.__mtd.startEndless());
+await page.waitForTimeout(150);
+const graze = await drive(page, 40, "graze", { noDeer: true });
+// 比べる相手は「続く道を普通に辿ったとき」。
+// wide は早死にして距離が短いぶん グレイズ/m が水増しされるので、基準にできない。
 check("縁を舐めるほうがよく稼げる", graze.perM > corridor.perM * 1.5,
-  `縁 ${graze.perM.toFixed(2)} / 安全 ${corridor.perM.toFixed(2)} グレイズ/m`);
-check("そのぶん危ない", graze.poopHits > corridor.poopHits,
+  `縁 ${graze.perM.toFixed(2)} / 続く道 ${corridor.perM.toFixed(2)} グレイズ/m`);
+check("そのぶん危ない", graze.poopHits >= corridor.poopHits + 2,
   `被弾 ${graze.poopHits} 対 ${corridor.poopHits}`);
 check("倍率が意味のある値まで伸びる", graze.mean > 1.25,
   `平均 ×${graze.mean.toFixed(2)}`);
