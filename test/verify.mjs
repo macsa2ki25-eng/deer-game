@@ -442,6 +442,40 @@ await page.waitForTimeout(400);
 check("再読み込みしても残る", (await page.locator("#rank-list li:not(.empty)").count()) >= 1);
 
 // ---- 新しい要素 ----
+section("ペース");
+/**
+ * **階段の長さそのものを主張として置く。**
+ *
+ * v0.12 まで、最後の解禁（観光客）は 600m＝148秒だった。
+ * 実測の走行中央値は 126m／42秒なので、ほとんどの人は
+ * 7段ある階段の最初の2段しか見ずに終わっていた。
+ * ここを検査に入れておかないと、また同じ形で伸びる。
+ */
+const pace = await page.evaluate(() => {
+  const C = window.__mtd.config;
+  const last = Math.max(...Object.values(C.UNLOCK));
+  let t = 0;
+  for (let d = 0; d < last; d += 0.25) t += 0.25 / C.scrollSpeed(d);
+  return { last, secs: t, levelM: C.LEVEL_M };
+});
+check("最後の解禁までが 100秒以内", pace.secs < 100,
+  `${pace.last}m / ${pace.secs.toFixed(0)}秒`);
+
+/**
+ * 難しさは距離だけで決まる。レベルの刻みを変えても動いてはいけない。
+ *
+ * **これはソースで見るしかない。** 実行時に `levelOf` を差し替えて
+ * 難易度カーブが動かないことを確かめようとしたが、ESモジュールの束縛は
+ * 書き換えられず `Cannot redefine property` で落ちる。
+ * 主張の実体は「難易度カーブが levelOf を呼ばない」なので、そこを直接見る。
+ */
+const configSrc = (await readFile(resolve(DIST, "../src/config.ts"), "utf8"))
+  .replace(/\/\*[\s\S]*?\*\//g, "")   // ブロックコメント
+  .replace(/\/\/.*$/gm, "");            // 行コメント（説明文の中の levelOf を数えない）
+const levelCalls = [...configSrc.matchAll(/(?<!function\s)levelOf\s*\(/g)].length;
+check("難易度カーブが levelOf を呼んでいない", levelCalls === 0,
+  `config.ts の呼び出し ${levelCalls} 箇所`);
+
 section("レベルで増える要素");
 
 /** 毎回まっさらな走行から始める。前の検査で死んでいると次が空振りするため。 */
@@ -522,13 +556,16 @@ check("寝ている鹿にフンが重ならない", crowded.poopOnSleeper === 0,
   `重なり ${crowded.poopOnSleeper} 回`);
 check("せんべいを持った観光客に鹿がたかる", crowded.scene >= 4, `最大 ${crowded.scene} 頭`);
 
-// 観光客は設定のオンオフではなく、レベルで出てくる（v0.12）。
-const beforeTourist = await probe(14, 450);
-const afterTourist = await probe(14, 1100);
-check("観光客はレベル7まで出ない", beforeTourist.tourists === 0,
-  `レベル5で ${beforeTourist.tourists} 人`);
-check("レベル7から観光客が歩いている", afterTourist.tourists > 0,
-  `レベル11で 同時に最大 ${afterTourist.tourists} 人`);
+// 観光客は設定のオンオフではなく、距離で出てくる（v0.12）。
+// 距離は定数から引く。埋め込むと、解禁を前倒ししたときに黙って外れる
+// （v0.13 でまさに外れた。450m は「まだ出ない」から「もう出る」に変わった）。
+const touristM = await page.evaluate(() => window.__mtd.config.UNLOCK.tourist);
+const beforeTourist = await probe(14, Math.max(0, touristM - 140));
+const afterTourist = await probe(14, touristM + 700);
+check(`観光客は ${touristM}m まで出ない`, beforeTourist.tourists === 0,
+  `${touristM - 140}m で ${beforeTourist.tourists} 人`);
+check(`${touristM}m から観光客が歩いている`, afterTourist.tourists > 0,
+  `${touristM + 700}m で 同時に最大 ${afterTourist.tourists} 人`);
 
 section("鹿せんべい");
 const senbei = await probe(20, 600, () => { window.__mtd.state.stallTimer = 0.1; });

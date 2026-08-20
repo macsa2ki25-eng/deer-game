@@ -116,7 +116,13 @@ export function poopRate(dist: number): number {
   // **「安全な線を1本通す」保証とセット**の数字だった。
   // 保証を外した v0.11 では、敷き詰めると単に理不尽になるので下げてある。
   // ランダムに落ちているから面白いのであって、量ではない。
-  return (0.9 + 1.5 * (1 - Math.exp(-dist / 700))) * WIDTH_K;
+  //
+  // v0.13 で**出だしだけ**下げた（0m で毎秒4.1塊 → 2.5塊）。
+  // 前は 0m からいきなりそこそこ濃く、操作を覚える前に汚れが溜まっていた。
+  // 解禁を前倒しした（UNLOCK を m で書き直した）ぶん、
+  // 同じ距離に出てくるものが増えているので、その埋め合わせでもある。
+  // 700m 以降はほぼ同じ数字に戻る——**濃くなった先を薄くしたわけではない。**
+  return (0.55 + 1.85 * (1 - Math.exp(-dist / 600))) * WIDTH_K;
 }
 
 /** 鹿の出現間隔 [s] */
@@ -126,55 +132,82 @@ export function deerInterval(dist: number): number {
 
 /** 追い鹿の割合 */
 export function homingShare(dist: number): number {
-  if (levelOf(dist) < UNLOCK.homing) return 0;
-  return Math.min(0.45, (dist - (UNLOCK.homing - 1) * LEVEL_M) / 2000);
+  if (dist < UNLOCK.homing) return 0;
+  return Math.min(0.45, (dist - UNLOCK.homing) / 2000);
 }
 
 /** 牡鹿（突進）の割合 */
 export function stagShare(dist: number): number {
-  if (levelOf(dist) < UNLOCK.stag) return 0;
-  return Math.min(0.2, (dist - (UNLOCK.stag - 1) * LEVEL_M) / 4000);
+  if (dist < UNLOCK.stag) return 0;
+  return Math.min(0.2, (dist - UNLOCK.stag) / 4000);
 }
 
 /** 横から入る鹿の割合。 */
 export const SIDE_SHARE = 0.3;
 
-// ---- レベル ----
+// ---- レベルと解禁（v0.13 で作り直し） ----
 
-/** 1レベルあたりの距離[m]。 */
-export const LEVEL_M = 100;
+/**
+ * **難しさは距離で決まる。レベルはその読み上げでしかない。**
+ *
+ * v0.12 まではこの2つが同じものだった。`levelOf(dist)` が
+ * 群れの頭数・寝ている群れの数・餌やり場の鹿の数まで直接動かしていたので、
+ * 「レベルの刻みを細かくする」と難易度まで一緒に上がってしまい、
+ * ペースだけを直すことができなかった。
+ *
+ * いま難易度カーブはすべて `dist`（m）を見ている。
+ * LEVEL_M を変えても、ある地点の難しさは1ミリも動かない。
+ * 動くのは「レベル◯」と出る間隔だけ。
+ */
+
+/** 1レベルあたりの距離[m]。表示の刻みであって、難しさとは無関係。 */
+export const LEVEL_M = 50;
 
 export function levelOf(dist: number): number {
   return Math.floor(dist / LEVEL_M) + 1;
 }
 
 /**
- * レベルごとの解禁。
- * 数字を滑らかに上げるだけだと変化が体感できないので、
- * 「新しい要素が出てくる」という形で段差を作る。
+ * 新しい要素が出てくる距離[m]。
+ *
+ * **v0.12 まではここが「レベル番号」で、いちばん遅い観光客が
+ * レベル7＝600m だった。600m は 148秒——2分半、ほぼ無傷で走り続けて
+ * ようやく最後の要素が出る計算で、30秒のゲームに7分の階段を載せていた。**
+ * 実際、30秒で進めるのは93mしかない。ほとんどの人は最初の2つしか見ずに終わる。
+ *
+ * いまは m で書いてあり、いちばん遅い観光客でも 300m＝84秒。
+ * 15秒に1つ、新しいものが出てくる勘定になる。
  */
 export const UNLOCK = {
-  stall: 2,   // 鹿せんべい売り場
-  side: 2,    // 横から入る鹿
-  pooper: 3,  // 道でフンをする鹿
-  tree: 4,    // 木で道が狭まる
-  stag: 5,    // 牡鹿
-  homing: 6,  // 追いかけてくる鹿
-  tourist: 7, // 参道を歩いている観光客
+  stall: 45,      // 鹿せんべい売り場
+  side: 45,       // 横から入る鹿
+  herd: 45,       // 群れで歩いてくる
+  pooper: 90,     // 道でフンをする鹿
+  tree: 140,      // 木で道が狭まる
+  sleepers: 140,  // 道に寝ている群れ
+  stag: 190,      // 牡鹿
+  scene: 190,     // せんべいを持った観光客と、たかる鹿
+  homing: 240,    // 追いかけてくる鹿
+  tourist: 290,   // 参道を歩いている観光客
+  bigPoop: 340,   // でかいフンが増える
 } as const;
 
-/** レベルアップ時に画面へ出す一言。無い回は null。 */
+/**
+ * レベルアップ時に画面へ出す一言。無い回は null。
+ * 解禁は m で決まるので、その m を含むレベルで読み上げる。
+ */
 export function levelNote(level: number): string | null {
-  switch (level) {
-    case UNLOCK.side: return "よこから 鹿がくる";
-    case UNLOCK.pooper: return "鹿が 道でしはじめる";
-    case UNLOCK.tree: return "木で 道がせまくなる";
-    case UNLOCK.stag: return "つのの ある鹿";
-    case UNLOCK.homing: return "おいかけてくる鹿";
-    case UNLOCK.tourist: return "参道が こんできた";
-    case 8: return "でかいフンが ふえる";
-    default: return null;
-  }
+  const from = (level - 1) * LEVEL_M;
+  const to = level * LEVEL_M;
+  const inThis = (m: number) => m > from - LEVEL_M && m <= to - LEVEL_M;
+  if (inThis(UNLOCK.side)) return "よこから 鹿がくる";
+  if (inThis(UNLOCK.pooper)) return "鹿が 道でしはじめる";
+  if (inThis(UNLOCK.tree)) return "木で 道がせまくなる";
+  if (inThis(UNLOCK.stag)) return "つのの ある鹿";
+  if (inThis(UNLOCK.homing)) return "おいかけてくる鹿";
+  if (inThis(UNLOCK.tourist)) return "参道が こんできた";
+  if (inThis(UNLOCK.bigPoop)) return "でかいフンが ふえる";
+  return null;
 }
 
 /**
@@ -187,24 +220,38 @@ export function levelNote(level: number): string | null {
  * フンを避ける手数そのものを削ってくる。だから鹿より遅く解禁して、
  * 濃さにも上限を置く。ここを詰めると、避ける余地が消えて理不尽になる。
  *
- * レベル7で 7.5秒に1人 → 奥で 3.4秒に1人。
+ * 解禁の直後で 7.5秒に1人 → 奥で 3.4秒に1人。
  */
 export function touristGap(dist: number): number {
-  const from = (UNLOCK.tourist - 1) * LEVEL_M;
-  if (dist < from) return Infinity;
-  const t = 1 - Math.exp(-(dist - from) / 900);
+  if (dist < UNLOCK.tourist) return Infinity;
+  const t = 1 - Math.exp(-(dist - UNLOCK.tourist) / 900);
   return 7.5 - 4.1 * t;
 }
 
 /** 道の途中で立ち止まってフンをする鹿の割合。 */
 export function pooperShare(dist: number): number {
-  return levelOf(dist) < UNLOCK.pooper ? 0 : 0.22;
+  return dist < UNLOCK.pooper ? 0 : 0.22;
 }
 
 // ---- フンの置き方 ----
 
 /** 塊の種類の重み。実際の鹿のフンは、まとまって落ちているか散っているかのどちらか。 */
 export const PATTERN_WEIGHTS = { scatter: 0.45, cluster: 0.42, big: 0.13 } as const;
+
+/**
+ * その距離での塊の重み。**でかいフンだけ、奥へ行くほど増える。**
+ *
+ * v0.12 まで、レベル8で「でかいフンが ふえる」と出るのに
+ * 重みは 0.13 の固定だった——**何も起きない告知**を出していた。
+ * 告知した以上は起きなければならないので、UNLOCK.bigPoop から
+ * 0.13 → 0.26 まで倍にする。増えるぶんは散らばりから取る
+ * （まとまった塊を減らすと、通れる隙間の作られ方まで変わってしまう）。
+ */
+export function patternWeights(dist: number): { scatter: number; cluster: number } {
+  const over = Math.max(0, dist - UNLOCK.bigPoop);
+  const big = PATTERN_WEIGHTS.big + 0.13 * (1 - Math.exp(-over / 700));
+  return { scatter: 1 - PATTERN_WEIGHTS.cluster - big, cluster: PATTERN_WEIGHTS.cluster };
+}
 /**
  * 塊の粒数。**距離で増やす。**
  * 定数のまま濃くしたら、ステージ1（難易度0m相当）がクリア不能になった。
@@ -341,8 +388,11 @@ export const JUMP_LIFT = 11;
  * 拾うと汚れが1減る。**ほんとうにたまに**しか置かない。
  * 頻繁に出ると「拾えば済む」ゲームになって、避ける緊張が消える。
  */
-export const SHOE_INTERVAL_MIN = 42;
-export const SHOE_INTERVAL_MAX = 78;
+// v0.13 で 42〜78秒から縮めた。**前は一度も出ないのと同じだった**——
+// 実測で走行の中央値が26〜65秒なので、42秒に1足では誰の目にも触れない。
+// 「ほんとたまに」を保ったまま、いい走りなら1回は拾える間隔にしてある。
+export const SHOE_INTERVAL_MIN = 26;
+export const SHOE_INTERVAL_MAX = 48;
 export const SHOE_BOX = { w: 11, h: 13 } as const;
 /** 拾う判定。絵よりだいぶ広く取る——取り逃しが別のミニゲームになると興ざめ。 */
 export const SHOE_REACH = 14;
@@ -421,55 +471,38 @@ export const FEED_CHAIN_MAX = 3.0;
 
 // ---- 鹿の群れ ----
 
-/** 一緒に歩いてくる群れの頭数。レベルで増える。 */
+/**
+ * 一緒に歩いてくる群れの頭数。**距離**で増える（レベルではない。下の注を参照）。
+ */
 export function herdSize(dist: number): number {
-  return 2 + Math.min(4, Math.floor(levelOf(dist) / 2));
+  return 2 + Math.min(4, Math.floor((dist + 100) / 200));
 }
 /** 出る鹿のうち、群れである割合。 */
 export function herdShare(dist: number): number {
-  return levelOf(dist) < 2 ? 0 : Math.min(0.4, 0.12 + levelOf(dist) * 0.03);
+  return dist < UNLOCK.herd ? 0 : Math.min(0.4, 0.15 + dist / 3333);
 }
 
-/** 道に寝そべって塞いでいる群れ。数もレベルで増える。 */
-export const UNLOCK_SLEEPERS = 3;
+/** 道に寝そべって塞いでいる群れ。数も距離で増える。 */
 export function sleeperRate(dist: number): number {
-  if (levelOf(dist) < UNLOCK_SLEEPERS) return 0;
-  return Math.min(0.09, 0.02 + levelOf(dist) * 0.006);
+  if (dist < UNLOCK.sleepers) return 0;
+  return Math.min(0.09, 0.026 + dist / 16667);
 }
 export function sleeperSize(dist: number): number {
-  return 3 + Math.min(5, Math.floor(levelOf(dist) / 2));
+  return 3 + Math.min(5, Math.floor((dist + 100) / 200));
 }
 
 /** せんべいを持った観光客と、それに群がる鹿。まるごと障害物。 */
-export const UNLOCK_FEEDING_SCENE = 4;
 export const FEEDING_SCENE_INTERVAL_MIN = 9;
 export const FEEDING_SCENE_INTERVAL_MAX = 17;
 export function sceneDeer(dist: number): number {
-  return 5 + Math.min(4, Math.floor(levelOf(dist) / 2));
+  return 5 + Math.min(4, Math.floor((dist + 100) / 200));
 }
 /** 餌やり場の鹿が観光客のまわりを回る半径。 */
 export const SCENE_RADIUS = 19;
 
-// ---- 関所：道を塞ぐようにフンを敷く ----
-
-/**
- * 関所。参道いっぱいにフンを敷き、1〜2箇所だけ穴を開ける。
- *
- * 最初は「回廊のところに穴を開ける」実装にしていたが、それだと
- * **関所が「安全な道はここです」という看板**になってしまい、逆効果だった。
- * いまは順序が逆で、**先に穴の位置を決めて、回廊をそこへ寄せる**。
- * 穴は「今の回廊」ではなく「これから回廊が向かう先」なので、
- * 遠くの穴を見て前もって寄せておく、という操作を要求できる。
- */
-export const UNLOCK_BARRIER = 2;
-export function barrierRate(dist: number): number {
-  if (levelOf(dist) < UNLOCK_BARRIER) return 0;
-  return Math.min(0.045, 0.012 + levelOf(dist) * 0.004);
-}
-/** 関所の隙間は回廊よりすこし広く開ける。ぴったりだと通り抜けの余地が無い。 */
-export const BARRIER_GAP_EXTRA = 8;
-/** 関所は何行ぶんの厚みで敷くか。薄いと壁に見えない。 */
-export const BARRIER_ROWS = 3;
+// 関所（道いっぱいにフンを敷いて1〜2箇所だけ開ける）は v0.8 で廃止した。
+// 「安全な道はここです」という看板になってしまい、狙いの逆をやっていた。
+// 定数だけ残っていたので v0.13 で消した。履歴は docs/DESIGN.md にある。
 
 // ---- 木（通れない） ----
 
@@ -477,13 +510,20 @@ export const TREE_BOX = { w: 26, h: 30, hitX: 4, hitY: 7, hitW: 18, hitH: 18 } a
 
 /** 1行あたりに木を置く確率。 */
 export function treeRate(dist: number): number {
-  if (levelOf(dist) < UNLOCK.tree) return 0;
-  return Math.min(0.42, 0.14 + (dist - (UNLOCK.tree - 1) * LEVEL_M) / 3000);
+  if (dist < UNLOCK.tree) return 0;
+  return Math.min(0.42, 0.14 + (dist - UNLOCK.tree) / 3000);
 }
 
 // ---- 休憩区間 ----
 
-export const REST_EVERY_M = 400;
+/**
+ * 休憩区間（何も置かない区間）。
+ *
+ * v0.13 で 400m → 170m。これも**前は一度も来ないのと同じ**だった。
+ * 400m は 107秒で、そこまで生き延びる走行がほとんど無い。
+ * 息継ぎは、届く場所にあって初めて息継ぎになる。
+ */
+export const REST_EVERY_M = 170;
 export const REST_SECONDS = 2.5;
 
 export function inRest(dist: number): boolean {
@@ -547,7 +587,18 @@ export const GRAZE_MAX = 2.0;
 export const DIRT_MAX = 5;
 export const DIRT_POOP = 1;
 export const DIRT_DEER = 2;
-export const INV_POOP = 0.5;
+/**
+ * 踏んだあとの無敵[s]。
+ *
+ * v0.12 まで 0.5秒で、**滑る時間（SLIP_POOP）と同じ長さ**だった。
+ * つまり踏む → 減速 → その塊から出られないまま無敵が切れる → もう一度踏む。
+ * 一度の失敗で2回も3回も取られていて、実測でも死因の9割がフンだった。
+ *
+ * 長さは測って決めてある。いちばん高い塊（18px）＋縦のばらつき（6px）＋
+ * 足元の当たり判定（7px）＝31px を、いちばん遅いスクロール（45px/s）で
+ * 抜けるのに 0.69秒。**踏んだものから出るまでは無敵でいられる**長さにする。
+ */
+export const INV_POOP = 0.8;
 export const INV_DEER = 1.1;
 export const STUN_DEER = 0.3;
 export const KNOCKBACK_DEER = 0.3;

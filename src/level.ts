@@ -376,11 +376,12 @@ export function spawnRow(s: State): void {
 
   const rate = C.poopRate(s.dist);
   const n = Math.floor(rate) + (Math.random() < rate % 1 ? 1 : 0);
+  const w = C.patternWeights(s.dist);
   for (let i = 0; i < n; i++) {
     const yOffset = -i * 3;
     const r = Math.random();
-    if (r < C.PATTERN_WEIGHTS.scatter) placeScatter(s, yOffset);
-    else if (r < C.PATTERN_WEIGHTS.scatter + C.PATTERN_WEIGHTS.cluster) placeCluster(s, yOffset);
+    if (r < w.scatter) placeScatter(s, yOffset);
+    else if (r < w.scatter + w.cluster) placeCluster(s, yOffset);
     else placeBig(s, yOffset);
   }
 
@@ -473,7 +474,7 @@ export function scheduleDeer(s: State): void {
     return;
   }
 
-  if (C.levelOf(s.dist) >= C.UNLOCK.side && Math.random() < C.SIDE_SHARE) {
+  if (s.dist >= C.UNLOCK.side && Math.random() < C.SIDE_SHARE) {
     const fromLeft = Math.random() < 0.5;
     s.warns.push({
       edge: fromLeft ? "left" : "right",

@@ -335,9 +335,15 @@ function resolvePoops(s: State): boolean {
 
     // 跳んでいるあいだはフンだけをすり抜ける。**鹿には当たる。**
     // かすめ判定は生きているので、跳びながら稼ぐこともできる。
-    if (s.air <= 0
-      && s.inv <= 0
-      && overlap(hx, hy, C.PLAYER.hitW, C.PLAYER.hitH, p.x, p.y, size.w, size.h)) {
+    if (s.air <= 0 && overlap(hx, hy, C.PLAYER.hitW, C.PLAYER.hitH, p.x, p.y, size.w, size.h)) {
+      // **無敵のあいだは蹴散らして進む。**
+      // 前はここで何もせず素通りしていたので、無敵が切れた瞬間に
+      // まだ同じ塊の中にいて、そのまま次の1発をもらっていた。
+      // それでは猶予ではなく「先送り」でしかない。
+      if (s.inv > 0) {
+        s.poops.splice(i, 1);
+        continue;
+      }
       s.poops.splice(i, 1);
       s.slip = C.SLIP_POOP;
       s.px += Math.random() < 0.5 ? -7 : 7;
@@ -469,7 +475,7 @@ export function step(s: State, input: InputState, dt: number): void {
     }
   }
 
-  if (C.levelOf(s.dist) >= C.UNLOCK.stall && !C.inRest(s.dist)) {
+  if (s.dist >= C.UNLOCK.stall && !C.inRest(s.dist)) {
     s.stallTimer -= dt;
     if (s.stallTimer <= 0) {
       spawnStall(s);
@@ -477,7 +483,7 @@ export function step(s: State, input: InputState, dt: number): void {
     }
   }
 
-  if (C.levelOf(s.dist) >= C.UNLOCK_FEEDING_SCENE && !C.inRest(s.dist)) {
+  if (s.dist >= C.UNLOCK.scene && !C.inRest(s.dist)) {
     s.sceneTimer -= dt;
     if (s.sceneTimer <= 0) {
       spawnFeedingScene(s);
@@ -548,7 +554,7 @@ export function step(s: State, input: InputState, dt: number): void {
   }
 
   // 観光客はレベルで出てくる。設定のオンオフではなく、奥へ行くほど参道が混む。
-  if (C.levelOf(s.dist) >= C.UNLOCK.tourist && !C.inRest(s.dist)) {
+  if (s.dist >= C.UNLOCK.tourist && !C.inRest(s.dist)) {
     s.touristTimer -= dt;
     if (s.touristTimer <= 0) {
       s.tourists.push({ x: C.PATH.x0 + 4 + Math.random() * (C.PATH_W - 20), y: C.ENTRY_Y, feeding: false });
