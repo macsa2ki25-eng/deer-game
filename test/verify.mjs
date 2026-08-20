@@ -86,6 +86,7 @@ window.__bot = (spec) => new Promise((done) => {
     sleepers: 0, scene: 0, herd: 0, maxSwarm: 0, baits: 0,
     maxSpans: 0, repairs: 0, narrowest: 999,
     minFuel: 1, shoes: 0, healed: 0, jumps: 0,
+    squatMaxY: -999, squatX0: 999, squatX1: -999, poopOnSleeper: 0, tourists: 0,
   };
   let lastDirt = 0;
   const mults = [];
@@ -243,7 +244,7 @@ window.__bot = (spec) => new Promise((done) => {
       done({
         phase: s.phase, progress: s.progress, score: s.score, dirt: s.dirt,
         graze: s.grazeCount, poopHits: s.poopHits, deerHits: s.deerHits,
-        senbei: s.senbei, encircled: s.encircled, swarmCount: s.swarmCount,
+        senbei: s.senbei, encircled: s.encircled, swarmCount: s.swarmCount, viewH: C.VIEW.h,
         ...seen, banners: seen.banners, mean,
         perM: s.grazeCount / Math.max(1, s.progress),
       });
@@ -271,6 +272,27 @@ window.__bot = (spec) => new Promise((done) => {
 
     mults.push(s.mult);
     if (s.deer.some((d) => d.squat > 0)) seen.squat++;
+    // ぶりぶりは画面の上端でしないと、避ける時間が残らない。
+    // 止まった位置と、そのあいだに横へ歩いた幅を測る。
+    for (const d of s.deer) {
+      if (d.squat <= 0) continue;
+      seen.squatMaxY = Math.max(seen.squatMaxY, d.y);
+      seen.squatX0 = Math.min(seen.squatX0, d.x);
+      seen.squatX1 = Math.max(seen.squatX1, d.x);
+    }
+    // 寝ている鹿の絵にフンが重なっていないか。当たり判定ではなく見た目で見る。
+    for (const d of s.deer) {
+      if (d.kind !== "sleeper") continue;
+      const bx = d.x + C.SLEEPER_ART.dx;
+      const by = d.y + C.SLEEPER_ART.dy;
+      for (const q of s.poops) {
+        const w = q.big ? C.BIG_PELLET.w : C.PELLET.w;
+        const h = q.big ? C.BIG_PELLET.h : C.PELLET.h;
+        if (q.x + w > bx && q.x < bx + C.SLEEPER_ART.w
+          && q.y + h > by && q.y < by + C.SLEEPER_ART.h) seen.poopOnSleeper++;
+      }
+    }
+    seen.tourists = Math.max(seen.tourists, s.tourists.filter((t) => !t.feeding).length);
     seen.trees = Math.max(seen.trees, s.trees.length);
     seen.sleepers = Math.max(seen.sleepers, s.deer.filter((d) => d.kind === "sleeper").length);
     seen.scene = Math.max(seen.scene, s.deer.filter((d) => d.kind === "scene").length);
@@ -433,6 +455,12 @@ check("レベルアップが画面に出る", lvUp.banners.length > 0, lvUp.bann
 
 const pooper = await probe(20, 250);
 check("鹿が道でフンをする", pooper.squat > 0, `しゃがんだフレーム ${pooper.squat}`);
+// 入ってきた場所で止まると、そのフンが届く頃にはもう避け終わった後ろにある。
+// 上端で止まって初めて「避ける時間」が丸ごと残る。
+check("ぶりぶりは画面の上端でする", pooper.squatMaxY >= 0 && pooper.squatMaxY < 26,
+  `いちばん下でも y=${pooper.squatMaxY.toFixed(1)}（画面は 0〜${pooper.viewH ?? 176}）`);
+check("ぶりぶりは横に歩いて帯にする", pooper.squatX1 - pooper.squatX0 > 18,
+  `横に ${(pooper.squatX1 - pooper.squatX0).toFixed(0)}px 歩いた`);
 
 const trees = await probe(16, 460);
 check("木が出て道が狭まる", trees.trees > 0, `同時に最大 ${trees.trees} 本`);
@@ -440,7 +468,18 @@ check("木が出て道が狭まる", trees.trees > 0, `同時に最大 ${trees.t
 const crowded = await probe(20, 520);
 check("鹿が群れで歩いてくる", crowded.herd >= 3, `同時に最大 ${crowded.herd} 頭`);
 check("寝ている群れが道を塞ぐ", crowded.sleepers > 0, `最大 ${crowded.sleepers} 頭`);
+// 鹿の背中からフンが生えて見えていた。当たり判定ではなく絵で重なりを見る。
+check("寝ている鹿にフンが重ならない", crowded.poopOnSleeper === 0,
+  `重なり ${crowded.poopOnSleeper} 回`);
 check("せんべいを持った観光客に鹿がたかる", crowded.scene >= 4, `最大 ${crowded.scene} 頭`);
+
+// 観光客は設定のオンオフではなく、レベルで出てくる（v0.12）。
+const beforeTourist = await probe(14, 450);
+const afterTourist = await probe(14, 1100);
+check("観光客はレベル7まで出ない", beforeTourist.tourists === 0,
+  `レベル5で ${beforeTourist.tourists} 人`);
+check("レベル7から観光客が歩いている", afterTourist.tourists > 0,
+  `レベル11で 同時に最大 ${afterTourist.tourists} 人`);
 
 section("鹿せんべい");
 const senbei = await probe(20, 600, () => { window.__mtd.state.stallTimer = 0.1; });
@@ -500,6 +539,32 @@ const relative = await (async () => {
   return Math.abs(after - before);
 })();
 check("指を置き直してもワープしない", relative < 12, `ずれ ${relative.toFixed(1)}px`);
+
+// ジャンプにボタンは無い。避けている最中に別のボタンへ親指を移す余裕が無かった。
+await page.evaluate(() => window.__mtd.startEndless());
+await page.waitForTimeout(200);
+const lift = await (async () => {
+  await page.evaluate(() => { window.__mtd.state.jumpFuel = 1; window.__mtd.state.air = 0; });
+  await page.mouse.move(pad.x + pad.width * 0.5, pad.y + pad.height * 0.5);
+  await page.mouse.down();
+  await page.waitForTimeout(200);
+  const midAir = await page.evaluate(() => window.__mtd.state.air);
+  await page.mouse.up();
+  await page.waitForTimeout(80);
+  const afterUp = await page.evaluate(() => window.__mtd.state.air);
+  // 跳んでいる最中に触り直して、そのまま動かせるか
+  const x0 = await page.evaluate(() => window.__mtd.state.px);
+  await page.mouse.move(pad.x + pad.width * 0.5, pad.y + pad.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(pad.x + pad.width * 0.85, pad.y + pad.height * 0.5, { steps: 6 });
+  await page.waitForTimeout(160);
+  const moved = await page.evaluate(() => ({ px: window.__mtd.state.px, air: window.__mtd.state.air }));
+  await page.mouse.up();
+  return { midAir, afterUp, movedWhileAir: moved.air > 0 && Math.abs(moved.px - x0) > 8 };
+})();
+check("なぞっているあいだは跳ばない", lift.midAir <= 0, `air ${lift.midAir.toFixed(2)}`);
+check("指を離すと跳ぶ", lift.afterUp > 0, `air ${lift.afterUp.toFixed(2)}`);
+check("跳んでいる最中でも触り直せば動ける", lift.movedWhileAir);
 
 // ---- 保証を切ったあとの手ざわり（ここが本丸） ----
 

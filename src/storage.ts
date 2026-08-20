@@ -15,7 +15,6 @@ const KEY = {
   stars: "mtd.stars",
   ranking: "mtd.ranking",
   sound: "mtd.sound",
-  tourists: "mtd.tourists",
 };
 
 function load<T>(key: string, fallback: T): T {
@@ -127,10 +126,4 @@ export function loadSound(): boolean {
 }
 export function saveSound(v: boolean): void {
   save(KEY.sound, v);
-}
-export function loadTourists(): boolean {
-  return load(KEY.tourists, false);
-}
-export function saveTourists(v: boolean): void {
-  save(KEY.tourists, v);
 }

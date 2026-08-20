@@ -101,7 +101,18 @@ export function attachInput(pad: HTMLElement, opts: InputOptions): InputState {
   const release = (e: PointerEvent) => {
     if (!st.touching) return;
     st.touching = false;
-    // 目標は保持する。指を離してもその場に立ち止まるだけ。
+    /**
+     * **指を離した瞬間にジャンプする。**
+     *
+     * ボタンは作らない。避けている最中にボタンを押す余裕は無いし、
+     * 押しに行くあいだ移動が止まる。
+     * 「離す」なら片手のまま、いま動かしている指だけで完結する。
+     *
+     * 目標（tx/ty）は保持したままにしてある。だから跳んでいる最中に
+     * もう一度触れば、その位置から続けて動かせる——
+     * 操作が相対方式なので、置き直してもキャラは飛ばない。
+     */
+    st.jump = true;
     try {
       pad.releasePointerCapture(e.pointerId);
     } catch {
@@ -116,7 +127,14 @@ export function attachInput(pad: HTMLElement, opts: InputOptions): InputState {
     a: "left", d: "right", w: "up", s: "down",
   };
 
+  // ブラウザで調整するとき用。実機ではパッドから指を離すのがジャンプ。
   window.addEventListener("keydown", (e) => {
+    if (e.code === "Space") {
+      first();
+      st.jump = true;
+      e.preventDefault();
+      return;
+    }
     const k = KEYS[e.key];
     if (!k) return;
     first();

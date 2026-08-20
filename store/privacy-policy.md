@@ -8,8 +8,10 @@
 > - 末尾の連絡先メールアドレスを実際のものに置き換える
 > - このファイルを GitHub Pages などで公開し、その URL を App Store Connect の
 >   「プライバシーポリシーURL」に入れる（広告を出すアプリでは入力必須）
-> - 広告の出し方を変えたら、ここと `ios/App/App/PrivacyInfo.xcprivacy` と
+> - 広告の出し方を変えたら、ここと `app.json`（`skAdNetworkItems` と AdMob プラグイン）と
 >   App Store Connect の「App のプライバシー」の**3つ全部**を揃えて直す
+>   （Capacitor をやめて Expo にしたので `ios/` フォルダは無い。
+>   ネイティブ側の設定は `app.json` からビルド時に作られる）
 
 ---
 

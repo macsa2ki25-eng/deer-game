@@ -62,10 +62,21 @@ function drawHud(ctx: CanvasRenderingContext2D, s: State): void {
     ctx.drawImage(i < s.dirt ? HUD.shoeBad : HUD.shoeOk, 4 + i * (SHOE + 1), 4);
   }
 
+  // ジャンプの残り。**回数そのもの**を点で出す。
+  // ボタンを廃止して「指を離す＝ジャンプ」にしたので、
+  // 残量の在りかがどこにも無くなった。数字より点のほうが速く読める。
+  const pips = Math.round(1 / C.JUMP_COST);
+  const px0 = 4 + C.DIRT_MAX * (SHOE + 1) + 5;
+  for (let i = 0; i < pips; i++) {
+    const have = s.jumpFuel >= (i + 1) * C.JUMP_COST - 0.001;
+    ctx.fillStyle = have ? "#7fae4e" : "#2f3a26";
+    ctx.fillRect(px0 + i * 5, 6, 3, 6);
+  }
+
   // きょり。ステージでは「ゴールまで」の残りを出す。
   const metres =
     s.mode === "stage" ? Math.max(0, Math.ceil(s.goal - s.progress)) : Math.floor(s.progress);
-  text(ctx, HUD.numDim, `${metres}m`, 4 + C.DIRT_MAX * (SHOE + 1) + 6, 5, 1);
+  text(ctx, HUD.numDim, `${metres}m`, px0 + pips * 5 + 5, 5, 1);
 
   // スコア。いちばん大きい数字＝スコア、で通じる。だからラベルが要らない。
   const score = String(Math.floor(s.score));
@@ -126,7 +137,7 @@ export function render(ctx: CanvasRenderingContext2D, s: State, bg: HTMLCanvasEl
     const x = Math.round(d.x);
     const y = Math.round(d.y);
     if (d.kind === "sleeper") {
-      ctx.drawImage(SPR.deerSleep, x, y + 4);
+      ctx.drawImage(SPR.deerSleep, x + C.SLEEPER_ART.dx, y + C.SLEEPER_ART.dy);
       continue;
     }
     if (d.squat > 0) {
@@ -138,7 +149,11 @@ export function render(ctx: CanvasRenderingContext2D, s: State, bg: HTMLCanvasEl
       ctx.drawImage(SPR.deerStag, x, y - 4);
       continue;
     }
-    const frame = Math.floor((s.walkAcc + d.y * 2) / 7) % 2;
+    // 添字は必ず 0 か 1。d.y は画面外（負）から入ってくるので、
+    // 素直に % 2 すると -1 になり、SPR.deer[-1] が undefined で
+    // **drawImage が例外を投げて描画ループごと止まっていた**。
+    // 走り出した直後（walkAcc がまだ小さい）だけ起きるので、目視では捕まらない。
+    const frame = ((Math.floor((s.walkAcc + d.y * 2) / 7) % 2) + 2) % 2;
     ctx.drawImage(SPR.deer[frame], x, y);
   }
 

@@ -97,12 +97,20 @@ function updatePooper(s: State, d: Deer, dt: number): void {
       d.dropIn = C.POOPER_INTERVAL;
       sfx.plop();
     }
-    if (d.squat <= 0) d.sp = C.deerSpeed(s.dist) * C.TILE;
+    // 横に歩きながら落とす。参道の端で折り返す。
+    d.x += d.vx * dt;
+    if (d.x < C.PATH.x0 || d.x > C.PATH.x1 - C.DEER_BOX.w) d.vx = -d.vx;
+    d.x = Math.max(C.PATH.x0, Math.min(C.PATH.x1 - C.DEER_BOX.w, d.x));
+    if (d.squat <= 0) {
+      d.sp = C.deerSpeed(s.dist) * C.TILE;
+      d.vx = 0;
+    }
     return;
   }
   if (d.dropsLeft > 0 && d.y > POOPER_TRIGGER_Y) {
     d.squat = C.POOPER_STOP;
     d.sp = 0;
+    d.vx = (Math.random() < 0.5 ? -1 : 1) * C.POOPER_SWEEP;
     d.dropIn = 0.05;
     sfx.snort();
   }
@@ -278,6 +286,10 @@ function moveEntities(s: State, vpx: number, dt: number): void {
       continue;
     }
 
+    // **しゃがんでいるあいだは背景のスクロールも打ち消す。**
+    // これが無いと、止まっていても画面の下へ流れていって、
+    // 落とし終わる頃にはもう通り過ぎている（updatePooper が横移動を持つ）。
+    if (d.squat > 0) continue;
     d.y += (vpx + d.sp) * dt;
     d.x += d.vx * dt;
 
@@ -423,7 +435,12 @@ function resolveShoes(s: State): void {
 // ---------------------------------------------------------------- 本体
 
 export function step(s: State, input: InputState, dt: number): void {
-  if (s.phase !== "playing") return;
+  if (s.phase !== "playing") {
+    // 遊んでいないあいだの「指を離した」は捨てる。
+    // 溜めておくと、走り出した1フレーム目でいきなり跳んで燃料が1つ減る。
+    input.jump = false;
+    return;
+  }
 
   const vpx = C.scrollSpeed(s.dist) * C.TILE;
   const metres = (vpx * dt) / C.TILE;
@@ -530,11 +547,12 @@ export function step(s: State, input: InputState, dt: number): void {
     if (w) (w.kind === "stag" ? sfx.paw : sfx.snort)();
   }
 
-  if (s.touristsOn && !C.inRest(s.dist)) {
+  // 観光客はレベルで出てくる。設定のオンオフではなく、奥へ行くほど参道が混む。
+  if (C.levelOf(s.dist) >= C.UNLOCK.tourist && !C.inRest(s.dist)) {
     s.touristTimer -= dt;
     if (s.touristTimer <= 0) {
       s.tourists.push({ x: C.PATH.x0 + 4 + Math.random() * (C.PATH_W - 20), y: C.ENTRY_Y, feeding: false });
-      s.touristTimer = 2.2 + Math.random() * 2.5;
+      s.touristTimer = C.touristGap(s.dist) * (0.7 + Math.random() * 0.6);
     }
   }
 

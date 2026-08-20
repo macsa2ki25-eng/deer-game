@@ -172,12 +172,10 @@ export interface State {
   deer: Deer[];
   tourists: Tourist[];
   warns: Warn[];
-
-  touristsOn: boolean;
 }
 
 export function createState(): State {
-  const s = { phase: "menu", mode: "endless", stage: 1, touristsOn: false } as State;
+  const s = { phase: "menu", mode: "endless", stage: 1 } as State;
   resetRun(s);
   return s;
 }

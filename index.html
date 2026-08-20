@@ -52,25 +52,8 @@
   .value.big{font-size:clamp(20px,6.4vmin,30px);color:var(--graze);line-height:1.15}
   .value small{font-size:10px;color:var(--muted);margin-left:2px}
 
-  /* ジャンプ。パッドの下いっぱい。親指が自然に降りてくる位置に置く。
-     操作は相対方式なので、指を離して押して掴み直しても位置が飛ばない。 */
-  #jump{
-    flex:none;height:74px;margin-top:7px;width:100%;position:relative;overflow:hidden;
-    border:1px solid var(--line);background:var(--tile);color:var(--ink);
-    font-size:15px;letter-spacing:.14em;padding:0;
-  }
-  /* 残量をボタンそのもので見せる。HUDに枠をもうひとつ作るより速く読める */
-  #jump-fuel{
-    position:absolute;inset:0 100% 0 0;background:rgba(126,174,78,.30);
-    transition:right .08s linear;pointer-events:none;
-  }
-  #jump span{position:relative}
-  #jump.ready{border-color:var(--accent)}
-  #jump.empty{color:var(--dim)}
-  #jump:active{filter:brightness(1.35)}
-
   #pad{
-    flex:1;min-height:150px;position:relative;touch-action:none;cursor:crosshair;overflow:hidden;
+    flex:1;min-height:180px;position:relative;touch-action:none;cursor:crosshair;overflow:hidden;
     background:
       linear-gradient(180deg,rgba(168,122,74,.10) 0%,transparent 42%),
       repeating-linear-gradient(0deg,#1d2417 0 1px,transparent 1px 14px),
@@ -201,11 +184,10 @@
       <div id="pad">
         <span class="pad-edge top">おく</span>
         <span class="pad-edge bottom">てまえ</span>
-        <div id="pad-hint">ここを なぞる</div>
+        <div id="pad-hint">なぞって うごく／はなすと ジャンプ</div>
         <div class="marker" id="pad-finger"></div>
         <div class="marker" id="pad-body"></div>
       </div>
-      <button id="jump" type="button"><span>ジャンプ</span><i id="jump-fuel"></i></button>
     </div>
   </div>
 
@@ -227,7 +209,6 @@
       </div>
       <div id="settings-row">
         <label><input id="sound" type="checkbox" checked>音</label>
-        <label><input id="tourists" type="checkbox">観光客</label>
       </div>
     </section>
 

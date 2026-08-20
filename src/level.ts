@@ -195,6 +195,44 @@ function placeSleepers(s: State): void {
   }
 }
 
+/**
+ * その四角が、寝ている鹿の**絵**に重なっているか。
+ * 少しだけ余白を取る。ドット絵なので、1px隣接した時点で「くっついている」に見える。
+ */
+const SLEEPER_PAD = 1;
+function onSleeper(s: State, x: number, y: number, w: number, h: number): boolean {
+  for (const d of s.deer) {
+    if (d.kind !== "sleeper") continue;
+    const bx = d.x + C.SLEEPER_ART.dx - SLEEPER_PAD;
+    const by = d.y + C.SLEEPER_ART.dy - SLEEPER_PAD;
+    if (x + w > bx && x < bx + C.SLEEPER_ART.w + SLEEPER_PAD * 2
+      && y + h > by && y < by + C.SLEEPER_ART.h + SLEEPER_PAD * 2) return true;
+  }
+  return false;
+}
+
+/**
+ * 寝ている鹿に重なったフンを消す。
+ *
+ * 置く側で避けさせるのではなく、置き終わってから退かしている。
+ * 群れは前の行から食い込んでくるし、フンは上へずれるしで、
+ * 「置くときに気をつける」では取りこぼす。この設計の他の場所と同じで、
+ * **自由に置いてから直すほうが漏れない。**
+ *
+ * 消すのはフンのほう。鹿を消すと、置いたばかりの群れが歯抜けになる。
+ * 通れるかどうかの検査（openRoute）より先に呼ぶこと——
+ * 消したあとの並びで道を見ないと、無いフンを避ける道を引いてしまう。
+ */
+function clearPoopsOnSleepers(s: State): void {
+  if (!s.deer.some((d) => d.kind === "sleeper")) return;
+  for (let i = s.poops.length - 1; i >= 0; i--) {
+    const p = s.poops[i];
+    const w = p.big ? C.BIG_PELLET.w : C.PELLET.w;
+    const h = p.big ? C.BIG_PELLET.h : C.PELLET.h;
+    if (onSleeper(s, p.x, p.y, w, h)) s.poops.splice(i, 1);
+  }
+}
+
 // ---------------------------------------------------------------- 通れるようにする
 
 /**
@@ -346,18 +384,27 @@ export function spawnRow(s: State): void {
     else placeBig(s, yOffset);
   }
 
+  clearPoopsOnSleepers(s);
   openRoute(s);
 }
 
-/** 立ち止まった鹿が落とす1粒。回廊の中にも落ちる（見えているので公平）。 */
+/**
+ * 立ち止まった鹿が1回に落とすぶん。
+ * 画面のいちばん上でしか呼ばれない（game.ts の POOPER_TRIGGER_Y）ので、
+ * ここで撒いた帯は、避ける時間をまるごと残したまま降りてくる。
+ */
 export function dropFromDeer(s: State, d: { x: number; y: number }): void {
-  s.poops.push(
-    pellet(
-      d.x + C.DEER_BOX.w / 2 - C.PELLET.w / 2 + (Math.random() - 0.5) * 7,
-      d.y + C.DEER_BOX.h - 4 + (Math.random() - 0.5) * 3,
-      false,
-    ),
-  );
+  // 1回で数粒まとめて、そこそこ広く散らす。
+  // 1粒ずつ点で落とすと、跡が細い線になって「ぶりぶり」に見えない。
+  const n = 2 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < n; i++) {
+    const x = d.x + C.DEER_BOX.w / 2 - C.PELLET.w / 2
+      + (Math.random() - 0.5) * 2 * C.POOPER_SPREAD;
+    const y = d.y + C.DEER_BOX.h - 5 + (Math.random() - 0.5) * 7;
+    if (x < C.PATH.x0 || x > C.PATH.x1 - C.PELLET.w) continue;
+    if (onSleeper(s, x, y, C.PELLET.w, C.PELLET.h)) continue;
+    s.poops.push(pellet(x, y, false));
+  }
 }
 
 /** 鹿を1頭つくる。増えたフィールドをここ一箇所で埋める。 */

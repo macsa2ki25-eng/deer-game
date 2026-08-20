@@ -160,6 +160,7 @@ export const UNLOCK = {
   tree: 4,    // 木で道が狭まる
   stag: 5,    // 牡鹿
   homing: 6,  // 追いかけてくる鹿
+  tourist: 7, // 参道を歩いている観光客
 } as const;
 
 /** レベルアップ時に画面へ出す一言。無い回は null。 */
@@ -170,9 +171,29 @@ export function levelNote(level: number): string | null {
     case UNLOCK.tree: return "木で 道がせまくなる";
     case UNLOCK.stag: return "つのの ある鹿";
     case UNLOCK.homing: return "おいかけてくる鹿";
+    case UNLOCK.tourist: return "参道が こんできた";
     case 8: return "でかいフンが ふえる";
     default: return null;
   }
+}
+
+/**
+ * 歩いている観光客が湧く間隔[秒]。
+ *
+ * 設定で出したり消したりするものではなく、**奥へ行くほど参道が混む**という
+ * 形にした。実際の東大寺の参道がそうだからでもあるが、遊びの理由のほうが大きい。
+ * 観光客は当たっても汚れない——押し戻されて下がるだけ。
+ * つまり「避ける相手」ではなく「行きたい方向を塞ぐもの」で、
+ * フンを避ける手数そのものを削ってくる。だから鹿より遅く解禁して、
+ * 濃さにも上限を置く。ここを詰めると、避ける余地が消えて理不尽になる。
+ *
+ * レベル7で 7.5秒に1人 → 奥で 3.4秒に1人。
+ */
+export function touristGap(dist: number): number {
+  const from = (UNLOCK.tourist - 1) * LEVEL_M;
+  if (dist < from) return Infinity;
+  const t = 1 - Math.exp(-(dist - from) / 900);
+  return 7.5 - 4.1 * t;
 }
 
 /** 道の途中で立ち止まってフンをする鹿の割合。 */
@@ -204,13 +225,26 @@ export const SCATTER_SPREAD = 30;
 export const SCATTER_JITTER_Y = 6;
 
 /** 立ち止まった鹿が落とす粒の数と間隔。 */
-export const POOPER_PELLETS = 7;
+export const POOPER_PELLETS = 13;
 export const POOPER_INTERVAL = 0.08;
 /**
- * 立ち止まる時間。長いと、落とし終わる頃には流されて画面の下にいる。
- * 上の方で「ぶりぶり」させて、こちらが避ける時間を作る。
+ * 立ち止まる時間。
+ *
+ * **止まっているあいだは背景スクロールぶんも打ち消す**（game.ts）。
+ * そうしないと「立ち止まって」いても画面の下へ流れていき、
+ * 落とし終わる頃にはもう通り過ぎている。実際そうなっていた。
+ * 画面の上端に貼り付いたまま、横に歩きながら落とす。
  */
-export const POOPER_STOP = 0.75;
+export const POOPER_STOP = 1.25;
+/**
+ * ぶりぶり中の横歩き[px/s]。歩きながら落とすので、跡が点ではなく帯になる。
+ * 1.04秒撒くので横に約40px、散らばり±9pxと合わせて**幅およそ58px**。
+ * 参道208pxの3割弱——避けて通れる幅は残しつつ、寄り道は強いられる。
+ * ここを上げすぎると道が塞がる（v0.11以降、通れる保証は無い）。
+ */
+export const POOPER_SWEEP = 38;
+/** 1粒ごとの散らばり[±px]。 */
+export const POOPER_SPREAD = 9;
 
 // ---- 通れることの保証（v0.10 で作り直し） ----
 
@@ -472,6 +506,17 @@ export const LATERAL = 150;
  */
 export const PLAYER = { w: 16, h: 22, hitX: 3, hitY: 14, hitW: 10, hitH: 7 } as const;
 export const DEER_BOX = { w: 16, h: 18, hitX: 2, hitY: 8, hitW: 12, hitH: 10 } as const;
+
+/**
+ * 寝ている鹿の**絵**の位置と大きさ（`d.x + dx`, `d.y + dy` から w×h）。
+ * 寝姿は立ち姿より低く、下に寄せて描いている。
+ *
+ * 当たり判定（DEER_BOX.hit*）と別に持っているのは、
+ * フンを退かすのに要るのが**見た目の四角**だからで、当たり判定ではない。
+ * 当たり判定だけ避けても、フンが鹿の背中から生えて見える。
+ * ここと render.ts の描画位置がずれると、また鹿とフンが重なる。
+ */
+export const SLEEPER_ART = { dx: 0, dy: 4, w: 16, h: 10 } as const;
 export const PELLET = { w: 4, h: 4 } as const;
 export const BIG_PELLET = { w: 7, h: 7 } as const;
 
