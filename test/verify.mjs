@@ -86,8 +86,11 @@ window.__bot = (spec) => new Promise((done) => {
     sleepers: 0, scene: 0, herd: 0, maxSwarm: 0, baits: 0,
     maxSpans: 0, repairs: 0, narrowest: 999,
     minFuel: 1, shoes: 0, healed: 0, jumps: 0,
-    squatMaxY: -999, squatX0: 999, squatX1: -999, poopOnSleeper: 0, tourists: 0,
+    squatMaxY: -999, squatDrift: 0, poopOnSleeper: 0, tourists: 0,
   };
+  // しゃがみ始めた位置。**1頭ごとに**見ないと、別々の鹿が別の場所で
+  // しゃがんだだけで「横に156px歩いた」ことになってしまう（実際そう出た）。
+  const squatFrom = new Map();
   let lastDirt = 0;
   const mults = [];
   const t0 = performance.now();
@@ -273,12 +276,12 @@ window.__bot = (spec) => new Promise((done) => {
     mults.push(s.mult);
     if (s.deer.some((d) => d.squat > 0)) seen.squat++;
     // ぶりぶりは画面の上端でしないと、避ける時間が残らない。
-    // 止まった位置と、そのあいだに横へ歩いた幅を測る。
+    // 止まった位置と、止まっているあいだに動いてしまった量を測る。
     for (const d of s.deer) {
-      if (d.squat <= 0) continue;
+      if (d.squat <= 0) { squatFrom.delete(d); continue; }
       seen.squatMaxY = Math.max(seen.squatMaxY, d.y);
-      seen.squatX0 = Math.min(seen.squatX0, d.x);
-      seen.squatX1 = Math.max(seen.squatX1, d.x);
+      if (!squatFrom.has(d)) squatFrom.set(d, d.x);
+      seen.squatDrift = Math.max(seen.squatDrift, Math.abs(d.x - squatFrom.get(d)));
     }
     // 寝ている鹿の絵にフンが重なっていないか。当たり判定ではなく見た目で見る。
     for (const d of s.deer) {
@@ -459,8 +462,54 @@ check("鹿が道でフンをする", pooper.squat > 0, `しゃがんだフレー
 // 上端で止まって初めて「避ける時間」が丸ごと残る。
 check("ぶりぶりは画面の上端でする", pooper.squatMaxY >= 0 && pooper.squatMaxY < 26,
   `いちばん下でも y=${pooper.squatMaxY.toFixed(1)}（画面は 0〜${pooper.viewH ?? 176}）`);
-check("ぶりぶりは横に歩いて帯にする", pooper.squatX1 - pooper.squatX0 > 18,
-  `横に ${(pooper.squatX1 - pooper.squatX0).toFixed(0)}px 歩いた`);
+// 横に歩かせてみたが、鹿が意味も無くうろついて見えただけだった。
+// いまは立ち止まって、出したものが流れて縦の帯になる。
+check("ぶりぶり中は立ち止まっている", pooper.squat > 0 && pooper.squatDrift < 1,
+  `1頭あたり横に ${pooper.squatDrift.toFixed(1)}px`);
+/**
+ * 跡が「お尻の真下の縦の帯」になっているか。
+ *
+ * 地面には生成器の置いたフンも流れているので、**出てきた瞬間の y** で見分ける。
+ * 生成器は画面の上（BASE_Y ≒ -6）に置き、鹿のお尻は y≒15。混ざらない。
+ */
+await page.evaluate(() => window.__mtd.startEndless());
+await page.waitForTimeout(150);
+const trail = await page.evaluate(async () => {
+  const M = window.__mtd, s = M.state, C = M.config;
+  s.progress = 300; s.dist = 300;
+  s.deer.length = 0; s.warns.length = 0; s.deerTimer = 999;
+  s.px = 180; s.py = 150; // 鹿とぶつからない場所へ避ける
+  const x0 = 60;
+  s.deer.push({
+    x: x0, y: C.ENTRY_Y, kind: "pooper", sp: C.deerSpeed(300) * C.TILE, vx: 0,
+    squat: 0, dropIn: 0, dropsLeft: C.POOPER_PELLETS,
+    swarm: false, orbit: 0, lockX: x0, host: null,
+  });
+  const seen = new Set();
+  const mine = [];
+  let cx = x0 + C.DEER_BOX.w / 2;
+  let squatted = false;
+  for (let i = 0; i < 400; i++) {
+    await new Promise((r) => requestAnimationFrame(r));
+    const d = s.deer.find((q) => q.kind === "pooper");
+    if (d && d.squat > 0) { squatted = true; cx = d.x + C.DEER_BOX.w / 2; }
+    for (const q of s.poops) {
+      if (seen.has(q)) continue;
+      seen.add(q);
+      // 生まれたてで、位置が鹿のお尻あたり＝この鹿が出したもの
+      if (q.y > 8) mine.push({ x: q.x + C.PELLET.w / 2, y: q.y });
+    }
+    if (squatted && (!d || d.squat <= 0)) break;
+  }
+  const offs = mine.map((q) => Math.abs(q.x - cx));
+  return {
+    n: mine.length,
+    maxOff: offs.length ? Math.max(...offs) : -1,
+    ys: mine.length ? Math.max(...mine.map((q) => q.y)) - Math.min(...mine.map((q) => q.y)) : 0,
+  };
+});
+check("フンはお尻の真下に出る", trail.n > 10 && trail.maxOff >= 0 && trail.maxOff < 12,
+  `${trail.n}粒 / 中心から最大 ${trail.maxOff.toFixed(1)}px`);
 
 const trees = await probe(16, 460);
 check("木が出て道が狭まる", trees.trees > 0, `同時に最大 ${trees.trees} 本`);
@@ -540,6 +589,51 @@ const relative = await (async () => {
 })();
 check("指を置き直してもワープしない", relative < 12, `ずれ ${relative.toFixed(1)}px`);
 
+/**
+ * **指を動かした量だけ、キャラも画面の上で動くか。**
+ *
+ * 前は「パッド全体＝可動域いっぱい」に合わせていたので、
+ * 横0.86倍・縦0.50倍で、しかも縦横で倍率が違った。
+ * 斜めに払うと別の角度へ、動かした量より短く動く——
+ * 「指にキャラがついてこない」の正体はこれ。いまは縦横とも1:1。
+ */
+await page.evaluate(() => window.__mtd.startEndless());
+await page.waitForTimeout(200);
+const follow = await (async () => {
+  const scale = await page.evaluate(() => {
+    const r = document.getElementById("screen").getBoundingClientRect();
+    return r.width / window.__mtd.config.CANVAS.w; // 画面px / ゲームpx
+  });
+  const measure = async (dx, dy) => {
+    // 可動域の真ん中から測る。端に貼り付いた状態から測ると、
+    // 動かない理由が「倍率」なのか「壁」なのか区別できない。
+    await page.evaluate(() => {
+      const M = window.__mtd, C = M.config;
+      M.state.px = (C.PATH.x0 + C.PATH.x1 - C.PLAYER.w) / 2;
+      M.state.py = (C.PLAY_Y.top + C.PLAY_Y.bottom) / 2;
+      M.input.tx = null;
+      M.input.ty = null;
+    });
+    await page.mouse.move(pad.x + pad.width * 0.5, pad.y + pad.height * 0.5);
+    await page.mouse.down();
+    const before = await page.evaluate(() => ({ x: window.__mtd.state.px, y: window.__mtd.state.py }));
+    // ゆっくり動かす（速度上限に当てないため。上限そのものは別の主張）
+    await page.mouse.move(pad.x + pad.width * 0.5 + dx, pad.y + pad.height * 0.5 + dy, { steps: 24 });
+    await page.waitForTimeout(320);
+    const after = await page.evaluate(() => ({ x: window.__mtd.state.px, y: window.__mtd.state.py }));
+    await page.mouse.up();
+    await page.waitForTimeout(60);
+    return { x: (after.x - before.x) * scale, y: (after.y - before.y) * scale };
+  };
+  const h = await measure(90, 0);
+  const v = await measure(0, 80);
+  return { hx: h.x, vy: v.y };
+})();
+check("指を動かした量だけキャラも動く（横）", Math.abs(follow.hx - 90) < 12,
+  `指90px に対して ${follow.hx.toFixed(0)}px`);
+check("指を動かした量だけキャラも動く（縦）", Math.abs(follow.vy - 80) < 12,
+  `指80px に対して ${follow.vy.toFixed(0)}px`);
+
 // ジャンプにボタンは無い。避けている最中に別のボタンへ親指を移す余裕が無かった。
 await page.evaluate(() => window.__mtd.startEndless());
 await page.waitForTimeout(200);
@@ -560,11 +654,50 @@ const lift = await (async () => {
   await page.waitForTimeout(160);
   const moved = await page.evaluate(() => ({ px: window.__mtd.state.px, air: window.__mtd.state.air }));
   await page.mouse.up();
-  return { midAir, afterUp, movedWhileAir: moved.air > 0 && Math.abs(moved.px - x0) > 8 };
+  const buttonHiddenByDefault = await page.evaluate(() => document.getElementById("jump").hidden);
+  return { midAir, afterUp, buttonHiddenByDefault,
+    movedWhileAir: moved.air > 0 && Math.abs(moved.px - x0) > 8 };
 })();
 check("なぞっているあいだは跳ばない", lift.midAir <= 0, `air ${lift.midAir.toFixed(2)}`);
 check("指を離すと跳ぶ", lift.afterUp > 0, `air ${lift.afterUp.toFixed(2)}`);
 check("跳んでいる最中でも触り直せば動ける", lift.movedWhileAir);
+
+// 「はなす」が合わない人のために、ボタンも選べる。選んだら**離しても跳ばない**。
+const byButton = await (async () => {
+  await page.evaluate(() => {
+    const r = [...document.querySelectorAll('input[name="jumpmode"]')].find((x) => x.value === "button");
+    r.checked = true;
+    r.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  const hidden = await page.evaluate(() => document.getElementById("jump").hidden);
+  await page.evaluate(() => window.__mtd.startEndless());
+  await page.waitForTimeout(200);
+  await page.evaluate(() => { window.__mtd.state.jumpFuel = 1; window.__mtd.state.air = 0; });
+  await page.mouse.move(pad.x + pad.width * 0.5, pad.y + pad.height * 0.5);
+  await page.mouse.down();
+  await page.waitForTimeout(160);
+  await page.mouse.up();
+  await page.waitForTimeout(120);
+  const afterRelease = await page.evaluate(() => window.__mtd.state.air);
+  const b = await page.locator("#jump").boundingBox();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(120);
+  await page.mouse.up();
+  const afterButton = await page.evaluate(() => window.__mtd.state.air);
+  // 元に戻す（このあとの走行は既定の「はなす」で測りたい）
+  await page.evaluate(() => {
+    const r = [...document.querySelectorAll('input[name="jumpmode"]')].find((x) => x.value === "release");
+    r.checked = true;
+    r.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  return { hidden, afterRelease, afterButton };
+})();
+check("既定ではボタンを出さない", lift.buttonHiddenByDefault);
+check("「ボタン」を選ぶとボタンが出る", byButton.hidden === false);
+check("「ボタン」のときは離しても跳ばない", byButton.afterRelease <= 0,
+  `air ${byButton.afterRelease.toFixed(2)}`);
+check("「ボタン」を押すと跳ぶ", byButton.afterButton > 0, `air ${byButton.afterButton.toFixed(2)}`);
 
 // ---- 保証を切ったあとの手ざわり（ここが本丸） ----
 

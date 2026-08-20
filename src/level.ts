@@ -394,13 +394,14 @@ export function spawnRow(s: State): void {
  * ここで撒いた帯は、避ける時間をまるごと残したまま降りてくる。
  */
 export function dropFromDeer(s: State, d: { x: number; y: number }): void {
-  // 1回で数粒まとめて、そこそこ広く散らす。
-  // 1粒ずつ点で落とすと、跡が細い線になって「ぶりぶり」に見えない。
+  // 1回で数粒まとめて出す。1粒ずつだと点線にしかならず「ぶりぶり」に見えない。
+  // 出る場所は**お尻**（体のいちばん下）。鹿は動かないので、
+  // 出たそばから背景と一緒に流れていき、跡は縦の帯になる。
   const n = 2 + Math.floor(Math.random() * 3);
   for (let i = 0; i < n; i++) {
     const x = d.x + C.DEER_BOX.w / 2 - C.PELLET.w / 2
       + (Math.random() - 0.5) * 2 * C.POOPER_SPREAD;
-    const y = d.y + C.DEER_BOX.h - 5 + (Math.random() - 0.5) * 7;
+    const y = d.y + C.DEER_BOX.h - 3 + (Math.random() - 0.5) * 4;
     if (x < C.PATH.x0 || x > C.PATH.x1 - C.PELLET.w) continue;
     if (onSleeper(s, x, y, C.PELLET.w, C.PELLET.h)) continue;
     s.poops.push(pellet(x, y, false));

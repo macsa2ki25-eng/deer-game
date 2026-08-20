@@ -10,11 +10,13 @@
 
 import * as C from "./config";
 import { seeded, send } from "./native";
+import type { JumpMode } from "./input";
 
 const KEY = {
   stars: "mtd.stars",
   ranking: "mtd.ranking",
   sound: "mtd.sound",
+  jumpMode: "mtd.jumpmode",
 };
 
 function load<T>(key: string, fallback: T): T {
@@ -126,4 +128,13 @@ export function loadSound(): boolean {
 }
 export function saveSound(v: boolean): void {
   save(KEY.sound, v);
+}
+
+/** ジャンプの出し方。既定は「はなす」。 */
+export function loadJumpMode(): JumpMode {
+  const v = load<string>(KEY.jumpMode, "release");
+  return v === "button" || v === "both" ? v : "release";
+}
+export function saveJumpMode(v: JumpMode): void {
+  save(KEY.jumpMode, v);
 }

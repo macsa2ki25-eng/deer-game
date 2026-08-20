@@ -41,7 +41,21 @@ export interface InputOptions {
   onFirstInput: () => void;
   /** いまのキャラの位置。指を置き直したときの基準にする。 */
   playerPos: () => { x: number; y: number };
+  /** ゲーム画面(canvas)の実寸。指1pxがゲーム内の何pxかを出すのに使う。 */
+  viewRect: () => { width: number; height: number };
+  /** ジャンプの出し方。設定で変えられる。 */
+  jumpMode: () => JumpMode;
 }
+
+/**
+ * ジャンプをどう出すか。
+ *
+ * `release` が既定。避けている最中の親指はパッドの中で動きっぱなしで、
+ * そこから別のボタンへ移す余裕が無い——というのが実際に触って出た結論。
+ * ただし「離したら跳ぶ」は、休もうとして指を上げたときにも跳ぶ。
+ * どちらが体に合うかは人によるので、選べるようにしてある。
+ */
+export type JumpMode = "release" | "button" | "both";
 
 export function attachInput(pad: HTMLElement, opts: InputOptions): InputState {
   const st: InputState = {
@@ -62,11 +76,25 @@ export function attachInput(pad: HTMLElement, opts: InputOptions): InputState {
   let anchorX = 0;
   let anchorY = 0;
 
+  /**
+   * 指1px = キャラ1px（**画面の上での見た目で**）にする倍率。
+   *
+   * 前は「パッド全体を撫でると可動域いっぱい」に合わせていた。
+   * これだと横 0.86倍・縦 0.50倍で、しかも**縦と横で倍率が違う**。
+   * 斜めに払うとキャラは別の角度へ動き、動かした量よりも短く動く——
+   * 「指にキャラがついてこない」はこれだった。
+   *
+   * いまは縦横とも同じ倍率（ゲーム画面の拡大率の逆数）。
+   * 指を10mm動かせば、画面の中のキャラも10mm動く。
+   * 可動域は横334px・縦230pxぶんの指の移動で端から端まで届くので、
+   * パッド（390×430程度）に収まりきる。
+   */
   const metrics = () => {
     const r = pad.getBoundingClientRect();
-    if (!r.width || !r.height) return null;
-    // パッド全体を撫でると可動域いっぱいをちょうど動かせる倍率
-    return { kx: (REACH.x1 - REACH.x0) / r.width, ky: (REACH.y1 - REACH.y0) / r.height, r };
+    const v = opts.viewRect();
+    if (!r.width || !r.height || !v.width) return null;
+    const k = C.CANVAS.w / v.width;
+    return { kx: k, ky: k, r };
   };
 
   const beginDrag = (clientX: number, clientY: number) => {
@@ -102,17 +130,17 @@ export function attachInput(pad: HTMLElement, opts: InputOptions): InputState {
     if (!st.touching) return;
     st.touching = false;
     /**
-     * **指を離した瞬間にジャンプする。**
+     * **指を離した瞬間にジャンプする**（設定が release / both のとき）。
      *
-     * ボタンは作らない。避けている最中にボタンを押す余裕は無いし、
-     * 押しに行くあいだ移動が止まる。
-     * 「離す」なら片手のまま、いま動かしている指だけで完結する。
+     * 避けている最中にボタンへ親指を移す余裕は無いし、
+     * 移しているあいだ移動が止まる。「離す」なら、
+     * いま動かしている指だけで完結する。
      *
      * 目標（tx/ty）は保持したままにしてある。だから跳んでいる最中に
      * もう一度触れば、その位置から続けて動かせる——
      * 操作が相対方式なので、置き直してもキャラは飛ばない。
      */
-    st.jump = true;
+    if (opts.jumpMode() !== "button") st.jump = true;
     try {
       pad.releasePointerCapture(e.pointerId);
     } catch {

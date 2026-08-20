@@ -8,7 +8,12 @@ import {
 import { sfx } from "./audio";
 import type { InputState } from "./input";
 
-/** 立ち止まってフンをし始める y。画面に入りきってから始める。 */
+/**
+ * 立ち止まってフンをし始める y。**画面のいちばん上**。
+ *
+ * 入ってきた場所で止めると、そのフンが自分に届く頃にはもう避け終わった後ろにある。
+ * ここでしか止まらないから、撒いた帯が上から降ってきて避ける時間が丸ごと残る。
+ */
 const POOPER_TRIGGER_Y = 0;
 
 function overlap(
@@ -97,20 +102,15 @@ function updatePooper(s: State, d: Deer, dt: number): void {
       d.dropIn = C.POOPER_INTERVAL;
       sfx.plop();
     }
-    // 横に歩きながら落とす。参道の端で折り返す。
-    d.x += d.vx * dt;
-    if (d.x < C.PATH.x0 || d.x > C.PATH.x1 - C.DEER_BOX.w) d.vx = -d.vx;
-    d.x = Math.max(C.PATH.x0, Math.min(C.PATH.x1 - C.DEER_BOX.w, d.x));
-    if (d.squat <= 0) {
-      d.sp = C.deerSpeed(s.dist) * C.TILE;
-      d.vx = 0;
-    }
+    // **その場から動かない。** 出したものが背景と一緒に流れていくので、
+    // 跡は勝手に縦の帯になる。鹿が横に歩くと、ただうろついて見えるだけだった。
+    if (d.squat <= 0) d.sp = C.deerSpeed(s.dist) * C.TILE;
     return;
   }
   if (d.dropsLeft > 0 && d.y > POOPER_TRIGGER_Y) {
     d.squat = C.POOPER_STOP;
     d.sp = 0;
-    d.vx = (Math.random() < 0.5 ? -1 : 1) * C.POOPER_SWEEP;
+    d.vx = 0;
     d.dropIn = 0.05;
     sfx.snort();
   }

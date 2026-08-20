@@ -2,7 +2,7 @@
 
 import * as C from "./config";
 import { createState, resetRun, type State } from "./state";
-import { attachInput, REACH } from "./input";
+import { attachInput, REACH, type JumpMode } from "./input";
 import { buildBackground } from "./background";
 import { step } from "./game";
 import { render } from "./render";
@@ -20,6 +20,9 @@ const padFinger = $<HTMLDivElement>("pad-finger");
 const padBody = $<HTMLDivElement>("pad-body");
 const screens = $<HTMLDivElement>("screens");
 const quitBtn = $<HTMLButtonElement>("quit");
+const jumpBtn = $<HTMLButtonElement>("jump");
+const jumpFuel = $<HTMLElement>("jump-fuel");
+const padHint = $<HTMLDivElement>("pad-hint");
 
 // プレイ中の数字は全部ゲーム画面（canvas）の HUD に移した。
 // 下段のDOMに残るのは、操作パッドと、レベルアップの一言だけ。
@@ -49,9 +52,55 @@ setEnabled(soundOn);
 const soundInput = $<HTMLInputElement>("sound");
 soundInput.checked = soundOn;
 
+/**
+ * ジャンプの出し方。
+ *
+ * 既定は「はなす」——避けている最中に別のボタンへ親指を移す余裕は無い、
+ * というのが実際に触って出た結論。
+ * ただし「離したら跳ぶ」は、ひと息つこうとして指を上げたときにも跳ぶ。
+ * どちらが体に合うかは人によるので、選べるようにしてある。
+ */
+let jumpMode: JumpMode = store.loadJumpMode();
+
+function applyJumpMode(): void {
+  jumpBtn.hidden = jumpMode === "release";
+  padHint.textContent =
+    jumpMode === "button" ? "なぞって うごく"
+      : jumpMode === "both" ? "なぞって うごく／はなすか ボタンで ジャンプ"
+        : "なぞって うごく／はなすと ジャンプ";
+  for (const r of jumpRadios) r.checked = r.value === jumpMode;
+}
+
+const jumpRadios = [...document.querySelectorAll<HTMLInputElement>('input[name="jumpmode"]')];
+for (const r of jumpRadios) {
+  r.addEventListener("change", () => {
+    if (!r.checked) return;
+    jumpMode = r.value as JumpMode;
+    store.saveJumpMode(jumpMode);
+    applyJumpMode();
+  });
+}
+applyJumpMode();
+
+/**
+ * ボタンは押した瞬間に効かせる（click だと指を離すまで待たされる）。
+ * 燃料が足りなければ何も起きない——無音だと故障に見えるので、
+ * ボタンの色と HUD の点の両方で残量が分かるようにしてある。
+ */
+for (const ev of ["pointerdown", "touchstart"] as const) {
+  jumpBtn.addEventListener(ev, (e) => {
+    e.preventDefault();
+    unlock();
+    input.jump = true;
+  }, { passive: false });
+}
+
 const input = attachInput(pad, {
   onFirstInput: unlock,
   playerPos: () => ({ x: state.px, y: state.py }),
+  // 指1px＝キャラ1px（画面の見た目で）にするため、ゲーム画面の実寸を渡す
+  viewRect: () => canvas.getBoundingClientRect(),
+  jumpMode: () => jumpMode,
 });
 
 /**
@@ -324,11 +373,25 @@ function finishRun(cleared: boolean): void {
 // ---------- HUD ----------
 
 /** パッド上に、指の位置（輪）とキャラの実際の位置（点）を出す。ずれが操作の手応えになる。 */
+/**
+ * パッドの上の2つの印。指の位置と、いまキャラが居る場所。
+ *
+ * キャラの印は**指と同じ縮尺**で描く。パッド全体に引き伸ばすと、
+ * 同じだけ指を動かしても2つの印が違う速さで動いて、壊れて見える
+ * （倍率を 1:1 にした v0.12 以降はとくに）。
+ * だから可動域ぶんの幅だけを、パッドの中央に置いて使う。
+ */
 function updateMarkers(): void {
-  const u = (state.px - REACH.x0) / (REACH.x1 - REACH.x0);
-  const v = (state.py - REACH.y0) / (REACH.y1 - REACH.y0);
-  padBody.style.left = `${u * 100}%`;
-  padBody.style.top = `${v * 100}%`;
+  const pr = pad.getBoundingClientRect();
+  const vr = canvas.getBoundingClientRect();
+  // ゲーム内1px が指の何pxにあたるか（＝ゲーム画面の拡大率）
+  const zoom = vr.width ? vr.width / C.CANVAS.w : 1;
+  const u = (state.px - REACH.x0) / (REACH.x1 - REACH.x0) - 0.5;
+  const v = (state.py - REACH.y0) / (REACH.y1 - REACH.y0) - 0.5;
+  const spanX = pr.width ? ((REACH.x1 - REACH.x0) * zoom) / pr.width : 1;
+  const spanY = pr.height ? ((REACH.y1 - REACH.y0) * zoom) / pr.height : 1;
+  padBody.style.left = `${(0.5 + u * spanX) * 100}%`;
+  padBody.style.top = `${(0.5 + v * spanY) * 100}%`;
   padFinger.style.left = `${input.padU * 100}%`;
   padFinger.style.top = `${input.padV * 100}%`;
   padFinger.style.opacity = input.touching ? "0.75" : "0.25";
@@ -357,6 +420,13 @@ function frame(now: number): void {
 
   render(ctx, state, bg);
   updateMarkers();
+
+  if (!jumpBtn.hidden) {
+    const canJump = state.jumpFuel >= C.JUMP_COST;
+    jumpFuel.style.right = `${(1 - state.jumpFuel) * 100}%`;
+    jumpBtn.classList.toggle("ready", canJump);
+    jumpBtn.classList.toggle("empty", !canJump);
+  }
 
   const showBanner = state.bannerT > 0 && state.phase === "playing";
   el.banner.classList.toggle("show", showBanner);
