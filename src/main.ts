@@ -1,9 +1,8 @@
-/** 起動・画面合わせ・ループ・画面遷移の配線。 */
+/** 起動・ループ・画面遷移。前の版の454行から、ここまで小さくなった。 */
 
 import * as C from "./config";
 import { createState, resetRun, type State } from "./state";
-import { attachInput, REACH, type JumpMode } from "./input";
-import { buildBackground } from "./background";
+import { attachInput } from "./input";
 import { step } from "./game";
 import { render } from "./render";
 import { unlock, setEnabled } from "./audio";
@@ -12,389 +11,68 @@ import * as ads from "./ads";
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
-const stageEl = $<HTMLDivElement>("stage");
+const stage = $<HTMLDivElement>("stage");
 const canvas = $<HTMLCanvasElement>("screen");
-const rotate = $<HTMLDivElement>("rotate");
-const pad = $<HTMLDivElement>("pad");
-const padFinger = $<HTMLDivElement>("pad-finger");
-const padBody = $<HTMLDivElement>("pad-body");
 const screens = $<HTMLDivElement>("screens");
-const quitBtn = $<HTMLButtonElement>("quit");
-const jumpBtn = $<HTMLButtonElement>("jump");
-const jumpFuel = $<HTMLElement>("jump-fuel");
-const padHint = $<HTMLDivElement>("pad-hint");
+const soundInput = $<HTMLInputElement>("sound");
 
-// プレイ中の数字は全部ゲーム画面（canvas）の HUD に移した。
-// 下段のDOMに残るのは、操作パッドと、レベルアップの一言だけ。
-const el = {
-  banner: $<HTMLDivElement>("banner"),
-};
-
-const sc = {
-  title: $<HTMLElement>("sc-title"),
-  stages: $<HTMLElement>("sc-stages"),
-  result: $<HTMLElement>("sc-result"),
-};
-
-canvas.width = C.CANVAS.w;
-canvas.height = C.CANVAS.h;
+canvas.width = C.VIEW.w;
+canvas.height = C.VIEW.h;
 const ctx = canvas.getContext("2d", { alpha: false })!;
 ctx.imageSmoothingEnabled = false;
 
-const bg = buildBackground();
 const state: State = createState();
+state.best = store.loadBest();
 
-const stars = store.loadStars();
-let ranking = store.loadRanking();
 let soundOn = store.loadSound();
 setEnabled(soundOn);
-
-const soundInput = $<HTMLInputElement>("sound");
 soundInput.checked = soundOn;
-
-/**
- * ジャンプの出し方。
- *
- * 既定は「はなす」——避けている最中に別のボタンへ親指を移す余裕は無い、
- * というのが実際に触って出た結論。
- * ただし「離したら跳ぶ」は、ひと息つこうとして指を上げたときにも跳ぶ。
- * どちらが体に合うかは人によるので、選べるようにしてある。
- */
-let jumpMode: JumpMode = store.loadJumpMode();
-
-function applyJumpMode(): void {
-  jumpBtn.hidden = jumpMode === "release";
-  padHint.textContent =
-    jumpMode === "button" ? "なぞって うごく"
-      : jumpMode === "both" ? "なぞって うごく／はなすか ボタンで ジャンプ"
-        : "なぞって うごく／はなすと ジャンプ";
-  for (const r of jumpRadios) r.checked = r.value === jumpMode;
-}
-
-const jumpRadios = [...document.querySelectorAll<HTMLInputElement>('input[name="jumpmode"]')];
-for (const r of jumpRadios) {
-  r.addEventListener("change", () => {
-    if (!r.checked) return;
-    jumpMode = r.value as JumpMode;
-    store.saveJumpMode(jumpMode);
-    applyJumpMode();
-  });
-}
-applyJumpMode();
-
-/**
- * ボタンは押した瞬間に効かせる（click だと指を離すまで待たされる）。
- * 燃料が足りなければ何も起きない——無音だと故障に見えるので、
- * ボタンの色と HUD の点の両方で残量が分かるようにしてある。
- */
-for (const ev of ["pointerdown", "touchstart"] as const) {
-  jumpBtn.addEventListener(ev, (e) => {
-    e.preventDefault();
-    unlock();
-    input.jump = true;
-  }, { passive: false });
-}
-
-const input = attachInput(pad, {
-  onFirstInput: unlock,
-  playerPos: () => ({ x: state.px, y: state.py }),
-  // 指1px＝キャラ1px（画面の見た目で）にするため、ゲーム画面の実寸を渡す
-  viewRect: () => canvas.getBoundingClientRect(),
-  jumpMode: () => jumpMode,
-});
-
-/**
- * ゲーム画面は横幅いっぱいに広げる（左右に余白を作らない）。
- * 縦に伸びすぎると下段が潰れるので、画面高の46%で頭打ちにする。
- */
-function resize(): void {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const widthLimitedByHeight = vh * 0.46 * (C.CANVAS.w / C.CANVAS.h);
-  stageEl.style.width = `${Math.floor(Math.min(vw, 560, widthLimitedByHeight))}px`;
-  rotate.classList.toggle("show", vw > vh * 1.25);
-}
-window.addEventListener("resize", resize);
-window.addEventListener("orientationchange", resize);
-resize();
-
-// ---------- 画面遷移 ----------
-
-type ScreenName = "title" | "stages" | "result" | null;
-
-function showScreen(name: ScreenName): void {
-  for (const k of ["title", "stages", "result"] as const) {
-    sc[k].classList.toggle("show", k === name);
-  }
-  screens.classList.toggle("show", name !== null);
-  quitBtn.hidden = name !== null;
-  if (name === "title") renderRanking($<HTMLOListElement>("rank-list"), -1);
-}
-
-// ---------- ランキング ----------
-
-function renderRanking(list: HTMLOListElement, highlight: number): void {
-  list.innerHTML = "";
-  if (ranking.length === 0) {
-    const p = document.createElement("li");
-    p.className = "empty";
-    p.textContent = "まだ記録がありません";
-    list.appendChild(p);
-    return;
-  }
-  ranking.forEach((e, i) => {
-    const li = document.createElement("li");
-    if (i + 1 === highlight) li.className = "me";
-    li.innerHTML =
-      `<span class="n">${i + 1}</span>` +
-      `<span class="d">${Math.floor(e.dist)}m・${e.graze}かすめ</span>` +
-      `<span class="s">${Math.floor(e.score).toLocaleString("en-US")}</span>`;
-    list.appendChild(li);
-  });
-}
-
-// ---------- ステージ選択 ----------
-
-let viewArea = 0;
-
-function starGlyphs(n: number): string {
-  let out = "";
-  for (let i = 0; i < 3; i++) out += i < n ? "★" : '<span class="off">★</span>';
-  return out;
-}
-
-function renderAreas(): void {
-  const wrap = $<HTMLDivElement>("area-list");
-  wrap.innerHTML = "";
-  for (let a = 0; a < C.AREA_COUNT; a++) {
-    const b = document.createElement("button");
-    const open = store.areaUnlocked(stars, a);
-    b.type = "button";
-    b.className = "area-btn" + (a === viewArea ? " on" : "") + (open ? "" : " locked");
-    b.innerHTML = `<span class="num">${a + 1}</span>${open ? C.AREA_NAMES[a] : "？？？"}`;
-    if (open) {
-      b.addEventListener("click", () => {
-        viewArea = a;
-        renderStageSelect();
-      });
-    } else {
-      b.disabled = true;
-    }
-    wrap.appendChild(b);
-  }
-}
-
-function renderStageSelect(): void {
-  renderAreas();
-  $<HTMLDivElement>("area-name").textContent = C.AREA_NAMES[viewArea];
-  const got = store.areaStars(stars, viewArea);
-  $<HTMLDivElement>("area-meta").textContent = `★${got} / ${C.STAGES_PER_AREA * 3}`;
-
-  const hint = $<HTMLDivElement>("area-hint");
-  if (viewArea + 1 < C.AREA_COUNT && !store.areaUnlocked(stars, viewArea + 1)) {
-    const need = C.AREA_UNLOCK_STARS - got;
-    hint.textContent = need > 0
-      ? `つぎのエリアまで ★あと ${need}`
-      : "つぎのエリアが あきました";
-  } else {
-    hint.textContent = "";
-  }
-
-  const wrap = $<HTMLDivElement>("stage-list");
-  wrap.innerHTML = "";
-  for (let i = 0; i < C.STAGES_PER_AREA; i++) {
-    const n = viewArea * C.STAGES_PER_AREA + i + 1;
-    const open = store.stageUnlocked(stars, n);
-    const got2 = stars[n - 1];
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "stage-btn" + (open ? "" : " locked") + (got2 > 0 ? " cleared" : "");
-    b.innerHTML = `${n}<span class="stars">${open ? starGlyphs(got2) : "&nbsp;"}</span>`;
-    if (open) b.addEventListener("click", () => startStage(n));
-    else b.disabled = true;
-    wrap.appendChild(b);
-  }
-}
-
-// ---------- プレイ開始 ----------
-
-function beginRun(): void {
-  unlock();
-  resetRun(state);
-  state.phase = "playing";
-  continuedThisRun = false;
-  showScreen(null);
-}
-
-function startEndless(): void {
-  state.mode = "endless";
-  beginRun();
-}
-
-function startStage(n: number): void {
-  state.mode = "stage";
-  state.stage = n;
-  beginRun();
-}
-
-$<HTMLButtonElement>("btn-endless").addEventListener("click", startEndless);
-$<HTMLButtonElement>("btn-stage").addEventListener("click", () => {
-  unlock();
-  renderStageSelect();
-  showScreen("stages");
-});
-$<HTMLButtonElement>("btn-back-title").addEventListener("click", () => showScreen("title"));
-quitBtn.addEventListener("click", () => {
-  state.phase = "menu";
-  showScreen(state.mode === "stage" ? "stages" : "title");
-  if (state.mode === "stage") renderStageSelect();
-});
-
 soundInput.addEventListener("change", () => {
   soundOn = soundInput.checked;
   setEnabled(soundOn);
   store.saveSound(soundOn);
 });
-pad.addEventListener("pointerdown", () => pad.classList.add("touched"));
+
+const input = attachInput(stage, {
+  onFirstInput: unlock,
+  onPress: () => stage.classList.add("touched"),
+});
+
+// ---------- 画面 ----------
+
+function showScreen(which: "title" | "over" | null): void {
+  for (const id of ["sc-title", "sc-over"]) {
+    $(id).classList.toggle("show", id === `sc-${which}`);
+  }
+  screens.classList.toggle("show", which !== null);
+}
+
+function startRun(): void {
+  resetRun(state);
+  state.phase = "playing";
+  showScreen(null);
+  unlock();
+}
+
+$("btn-start").addEventListener("click", startRun);
+$("btn-retry").addEventListener("click", startRun);
+$("btn-back").addEventListener("click", () => showScreen("title"));
 
 // ---------- リザルト ----------
 
-const resultTitle = $<HTMLDivElement>("result-title");
-const resultStars = $<HTMLDivElement>("result-stars");
-const resultLines = $<HTMLDivElement>("result-lines");
-const rankResult = $<HTMLDivElement>("rank-result");
-const btnNext = $<HTMLButtonElement>("btn-next");
-const btnRetry = $<HTMLButtonElement>("btn-retry");
-const btnBack = $<HTMLButtonElement>("btn-back");
-const btnContinue = $<HTMLButtonElement>("btn-continue");
-
-/** この1回のプレイでもう復活したか。1回きりにしないと記録の意味が消える。 */
-let continuedThisRun = false;
-
-/**
- * 動画を見てその場から再開する。
- * 距離もスコアも引き継ぐので、汚れを全快にはしない（ads.ts の CONTINUE_DIRT）。
- */
-btnContinue.addEventListener("click", async () => {
-  btnContinue.disabled = true;
-  const watched = await ads.showContinueAd();
-  btnContinue.disabled = false;
-  if (!watched) return;
-
-  continuedThisRun = true;
-  state.dirt = ads.CONTINUE_DIRT;
-  state.inv = ads.CONTINUE_INV;
-  state.stun = 0;
-  state.slip = 0;
-  state.encircled = false;
-  state.swarmCount = 0;
-  // 目の前に残っている鹿はどけておく。無敵が切れた瞬間に轢かれては意味がない。
-  state.deer.length = 0;
-  state.warns.length = 0;
-  state.phase = "playing";
-  showScreen(null);
-});
-
-btnRetry.addEventListener("click", async () => {
-  await ads.runFinished();
-  if (state.mode === "stage") startStage(state.stage);
-  else startEndless();
-});
-btnBack.addEventListener("click", async () => {
-  await ads.runFinished();
-  if (state.mode === "stage") {
-    renderStageSelect();
-    showScreen("stages");
-  } else {
-    showScreen("title");
+function finishRun(): void {
+  const score = Math.floor(state.score);
+  if (score > state.best) {
+    state.best = score;
+    store.saveBest(score);
   }
-});
-btnNext.addEventListener("click", () => {
-  const next = state.stage + 1;
-  if (next <= C.STAGE_COUNT && store.stageUnlocked(stars, next)) startStage(next);
-  else {
-    renderStageSelect();
-    showScreen("stages");
-  }
-});
-
-function finishRun(cleared: boolean): void {
-  const num = (v: number) => Math.floor(v).toLocaleString("en-US");
-
-  // 1回遊んでもらってから広告を用意する。起動直後にATTを出しても拒否されるだけ。
-  void ads.initAds();
-  // 読み込み済みのときしか出さない。押してから「読み込めません」が最悪なので。
-  btnContinue.hidden = cleared || continuedThisRun || !ads.canOfferContinue();
-
-  if (state.mode === "stage") {
-    rankResult.hidden = true;
-    if (cleared) {
-      const got = C.starsFor(state.dirt);
-      store.recordStars(stars, state.stage, got);
-      resultTitle.textContent = "ゴール！";
-      resultStars.hidden = false;
-      resultStars.innerHTML = starGlyphs(got);
-      resultLines.innerHTML =
-        `スコア <b>${num(state.score)}</b><br>` +
-        `よごれ <b>${state.dirt}</b> ／ かすめ <b>${state.grazeCount}</b>`;
-      const next = state.stage + 1;
-      btnNext.hidden = !(next <= C.STAGE_COUNT && store.stageUnlocked(stars, next));
-    } else {
-      resultTitle.textContent = "くつが もうだめ";
-      resultStars.hidden = true;
-      resultLines.innerHTML =
-        `ステージ <b>${state.stage}</b>／ゴールまで <b>${Math.max(0, Math.ceil(state.goal - state.progress))}</b> m<br>` +
-        `かすめ <b>${state.grazeCount}</b>`;
-      btnNext.hidden = true;
-    }
-    btnBack.textContent = "ステージ選択";
-  } else {
-    const rank = store.recordScore(ranking, {
-      score: Math.floor(state.score),
-      dist: Math.floor(state.progress),
-      graze: state.grazeCount,
-      at: Date.now(),
-    });
-    ranking = store.loadRanking();
-    resultTitle.textContent = "くつが もうだめ";
-    resultStars.hidden = true;
-    resultLines.innerHTML =
-      `スコア <b>${num(state.score)}</b><br>` +
-      `きょり <b>${Math.floor(state.progress)}</b> m ／ かすめ <b>${state.grazeCount}</b>` +
-      (rank ? `<br>この端末で <b>${rank}位</b>` : "");
-    rankResult.hidden = false;
-    renderRanking($<HTMLOListElement>("rank-list2"), rank);
-    btnNext.hidden = true;
-    btnBack.textContent = "タイトルへ";
-  }
-  showScreen("result");
-}
-
-// ---------- HUD ----------
-
-/** パッド上に、指の位置（輪）とキャラの実際の位置（点）を出す。ずれが操作の手応えになる。 */
-/**
- * パッドの上の2つの印。指の位置と、いまキャラが居る場所。
- *
- * キャラの印は**指と同じ縮尺**で描く。パッド全体に引き伸ばすと、
- * 同じだけ指を動かしても2つの印が違う速さで動いて、壊れて見える
- * （倍率を 1:1 にした v0.12 以降はとくに）。
- * だから可動域ぶんの幅だけを、パッドの中央に置いて使う。
- */
-function updateMarkers(): void {
-  const pr = pad.getBoundingClientRect();
-  const vr = canvas.getBoundingClientRect();
-  // ゲーム内1px が指の何pxにあたるか（＝ゲーム画面の拡大率）
-  const zoom = vr.width ? vr.width / C.CANVAS.w : 1;
-  const u = (state.px - REACH.x0) / (REACH.x1 - REACH.x0) - 0.5;
-  const v = (state.py - REACH.y0) / (REACH.y1 - REACH.y0) - 0.5;
-  const spanX = pr.width ? ((REACH.x1 - REACH.x0) * zoom) / pr.width : 1;
-  const spanY = pr.height ? ((REACH.y1 - REACH.y0) * zoom) / pr.height : 1;
-  padBody.style.left = `${(0.5 + u * spanX) * 100}%`;
-  padBody.style.top = `${(0.5 + v * spanY) * 100}%`;
-  padFinger.style.left = `${input.padU * 100}%`;
-  padFinger.style.top = `${input.padV * 100}%`;
-  padFinger.style.opacity = input.touching ? "0.75" : "0.25";
+  $("over-score").textContent = String(score);
+  $("over-best").textContent = `さいこう ${state.best}`;
+  $("over-why").textContent = state.deerHits > state.poopHits
+    ? "前を みてなかった"
+    : "下を みてなかった";
+  showScreen("over");
+  void ads.runFinished();
 }
 
 // ---------- ループ ----------
@@ -410,43 +88,29 @@ function frame(now: number): void {
   last = now;
   if (dt > 0.25) dt = 0.25; // タブ復帰などで一気に進めない
 
+  // 指の状態をそのまま視線にする。ここが操作の全部。
+  state.down = input.down;
+
   acc += dt;
   let guard = 0;
   while (acc >= FIXED && guard++ < 8) {
-    step(state, input, FIXED);
+    step(state, FIXED);
     acc -= FIXED;
   }
   if (guard >= 8) acc = 0;
 
-  render(ctx, state, bg);
-  updateMarkers();
+  render(ctx, state);
 
-  if (!jumpBtn.hidden) {
-    const canJump = state.jumpFuel >= C.JUMP_COST;
-    jumpFuel.style.right = `${(1 - state.jumpFuel) * 100}%`;
-    jumpBtn.classList.toggle("ready", canJump);
-    jumpBtn.classList.toggle("empty", !canJump);
-  }
-
-  const showBanner = state.bannerT > 0 && state.phase === "playing";
-  el.banner.classList.toggle("show", showBanner);
-  if (showBanner && el.banner.textContent !== state.banner) {
-    el.banner.textContent = state.banner;
-  }
-
-  if (wasPlaying && state.phase !== "playing") {
-    if (state.phase === "over" || state.phase === "clear") finishRun(state.phase === "clear");
-  }
+  if (wasPlaying && state.phase === "over") finishRun();
   wasPlaying = state.phase === "playing";
 
   requestAnimationFrame(frame);
 }
 
-// ?debug=1 で内部状態を覗けるようにする。バランス調整の自動テストがここを使う。
+// ?debug=1 で内部状態を覗けるようにする。検証がここを使う。
 if (new URLSearchParams(location.search).has("debug")) {
   (window as Window & { __mtd?: unknown }).__mtd = {
-    state, reach: REACH, config: C, stars,
-    startEndless, startStage, input,
+    state, config: C, input, start: startRun,
   };
 }
 

@@ -1,587 +1,217 @@
-/** 1フレームぶんの更新。描画はここではやらない。 */
+/**
+ * 1フレームぶんの更新。
+ *
+ * 遊びの芯はここの `s.down` 1ビットだけ:
+ *
+ *   下を見ている → 足元のフンを跨ぐ。鹿は見えないのでぶつかる。足が遅い
+ *   前を見ている → 鹿をよける。足元は踏む。速い
+ *
+ * **当たり判定は「重なったか」ではなく「通り過ぎたか」で取る。**
+ * 重なりで取ると、判定の幅の分だけ「あと数px」が生まれ、
+ * それはそのまま位置合わせの巧拙になってしまう。ここでやりたいのは逆で、
+ * 通り過ぎる瞬間にどちらを見ていたか、だけで決まってほしい。
+ */
 
 import * as C from "./config";
-import type { State, Deer } from "./state";
-import {
-  spawnRow, scheduleDeer, hatchDeer, dropFromDeer, spawnStall, spawnShoe, spawnFeedingScene,
-} from "./level";
+import type { State, Deer, Poop } from "./state";
 import { sfx } from "./audio";
-import type { InputState } from "./input";
 
-/**
- * 立ち止まってフンをし始める y。**画面のいちばん上**。
- *
- * 入ってきた場所で止めると、そのフンが自分に届く頃にはもう避け終わった後ろにある。
- * ここでしか止まらないから、撒いた帯が上から降ってきて避ける時間が丸ごと残る。
- */
-const POOPER_TRIGGER_Y = 0;
-
-function overlap(
-  ax: number, ay: number, aw: number, ah: number,
-  bx: number, by: number, bw: number, bh: number,
-): boolean {
-  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+/** いまの走る速さ[px/s]。 */
+export function speed(s: State): number {
+  if (s.trip > 0) return 0;
+  const v = C.speedAhead(s.t);
+  return s.down ? v * C.SLOW_FACTOR : v;
 }
 
-/** 画面に一言出す。 */
-function banner(s: State, text: string, seconds: number): void {
+function banner(s: State, text: string, secs: number): void {
   s.banner = text;
-  s.bannerT = seconds;
+  s.bannerT = secs;
 }
 
-// ---------------------------------------------------------------- プレイヤー
-
-function movePlayer(s: State, input: InputState, dt: number): void {
-  // 囲まれているあいだは、鹿に押されてほとんど動けない。怖さの本体はここ。
-  const slowed = (s.slip > 0 ? C.SLIP_FACTOR : 1) * (s.stun > 0 ? 0 : 1)
-    * (s.encircled ? C.ENCIRCLE_SLOW : 1);
-  const maxStep = C.LATERAL * slowed * dt;
-
-  const kx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-  const ky = (input.down ? 1 : 0) - (input.up ? 1 : 0);
-
-  if (kx || ky) {
-    const len = Math.hypot(kx, ky);
-    s.px += (kx / len) * maxStep;
-    s.py += (ky / len) * maxStep;
-  } else if (input.tx !== null && input.ty !== null && s.stun <= 0) {
-    const dx = input.tx - s.px;
-    const dy = input.ty - s.py;
-    const d = Math.hypot(dx, dy);
-    if (d <= maxStep || d === 0) {
-      s.px = input.tx;
-      s.py = input.ty;
-    } else {
-      s.px += (dx / d) * maxStep;
-      s.py += (dy / d) * maxStep;
-    }
-  }
-
-  if (s.knockback > 0) {
-    s.py += C.KNOCKBACK_SPEED * dt;
-    s.knockback -= dt;
-  }
-
-  // 参道の外へは出られない。安全地帯があると避けゲーは即座に壊れる。
-  s.px = Math.max(C.PATH.x0, Math.min(C.PATH.x1 - C.PLAYER.w, s.px));
-  s.py = Math.max(C.PLAY_Y.top, Math.min(C.PLAY_Y.bottom, s.py));
-}
-
-/** 木は通り抜けられない。重なっていたら、いちばん浅い向きへ押し出す。 */
-function resolveTrees(s: State): void {
-  for (const t of s.trees) {
-    const hx = s.px + C.PLAYER.hitX;
-    const hy = s.py + C.PLAYER.hitY;
-    const bx = t.x + C.TREE_BOX.hitX;
-    const by = t.y + C.TREE_BOX.hitY;
-    if (!overlap(hx, hy, C.PLAYER.hitW, C.PLAYER.hitH, bx, by, C.TREE_BOX.hitW, C.TREE_BOX.hitH)) continue;
-
-    const outLeft = bx - (hx + C.PLAYER.hitW);
-    const outRight = bx + C.TREE_BOX.hitW - hx;
-    const outUp = by - (hy + C.PLAYER.hitH);
-    const outDown = by + C.TREE_BOX.hitH - hy;
-    const dx = Math.abs(outLeft) < Math.abs(outRight) ? outLeft : outRight;
-    const dy = Math.abs(outUp) < Math.abs(outDown) ? outUp : outDown;
-    if (Math.abs(dx) <= Math.abs(dy)) s.px += dx;
-    else s.py += dy;
-  }
-  s.px = Math.max(C.PATH.x0, Math.min(C.PATH.x1 - C.PLAYER.w, s.px));
-  s.py = Math.max(C.PLAY_Y.top, Math.min(C.PLAY_Y.bottom, s.py));
-}
-
-// ---------------------------------------------------------------- 鹿
-
-/** 道の途中で立ち止まってフンをする鹿。落ちた粒はその場の障害物になる。 */
-function updatePooper(s: State, d: Deer, dt: number): void {
-  if (d.squat > 0) {
-    d.squat -= dt;
-    d.dropIn -= dt;
-    if (d.dropIn <= 0 && d.dropsLeft > 0) {
-      dropFromDeer(s, d);
-      d.dropsLeft--;
-      d.dropIn = C.POOPER_INTERVAL;
-      sfx.plop();
-    }
-    // **その場から動かない。** 出したものが背景と一緒に流れていくので、
-    // 跡は勝手に縦の帯になる。鹿が横に歩くと、ただうろついて見えるだけだった。
-    if (d.squat <= 0) d.sp = C.deerSpeed(s.dist) * C.TILE;
-    return;
-  }
-  if (d.dropsLeft > 0 && d.y > POOPER_TRIGGER_Y) {
-    d.squat = C.POOPER_STOP;
-    d.sp = 0;
-    d.vx = 0;
-    d.dropIn = 0.05;
-    sfx.snort();
-  }
-}
-
-/**
- * 鹿せんべい。ボタンは無い。**接触がそのまま給餌**。
- *
- *   持っている → 鹿にぶつかっても汚れず、1枚渡して鹿は去る（得点）
- *   つまり持っているあいだだけ、避けゲーが「当てにいくゲーム」に反転する。
- *
- *   ただし群れ（ENCIRCLE_AT 頭以上の塊）に踏み込むと取り囲まれる。
- *   囲まれると、せんべいが尽きるまで解けない。
- *   一定間隔で1枚ずつ持っていかれるので、**拘束時間＝残り枚数**。
- *   抱えたまま群れに突っ込むほど長く動けない。
- *
- * 「囲まれてただ待つ」にならないよう、拘束の長さは自分で決められるようにしてある。
- * 単独の鹿にわざとぶつけて枚数を減らしてから進む、という手が打てる。
- */
-function updateEncircle(s: State, dt: number): void {
-  s.grace = Math.max(0, s.grace - dt);
-  const cx = s.px + C.PLAYER.w / 2;
-  const cy = s.py + C.PLAYER.h / 2;
-
-  const near = (d: Deer, r: number) => {
-    const dx = d.x + C.DEER_BOX.w / 2 - cx;
-    const dy = d.y + C.DEER_BOX.h / 2 - cy;
-    return dx * dx + dy * dy < r * r;
-  };
-  const canJoin = (d: Deer) => d.kind !== "stag" && d.kind !== "sleeper";
-
-  // 捕まる瞬間
-  if (!s.encircled && s.senbei > 0 && s.grace <= 0) {
-    let n = 0;
-    for (const d of s.deer) if (canJoin(d) && near(d, C.ENCIRCLE_RADIUS)) n++;
-    if (n >= C.ENCIRCLE_AT) {
-      s.encircled = true;
-      s.drainT = C.ENCIRCLE_DRAIN;
-      banner(s, "かこまれた！", 1.4);
-      sfx.snort();
-      // 近くにいた鹿を取り込む。さらに気づいた鹿も後から寄ってくる
-      for (const d of s.deer) {
-        if (canJoin(d) && near(d, C.NOTICE_RADIUS)) {
-          d.swarm = true;
-          d.host = null;
-          d.sp = 0;
-        }
-      }
-    }
-  }
-
-  if (!s.encircled) {
-    s.swarmCount = 0;
-    return;
-  }
-
-  // 囲まれているあいだ：まわりを回り、順番に1枚ずつ持っていく
-  let count = 0;
-  for (const d of s.deer) {
-    if (!canJoin(d)) continue;
-    if (!d.swarm && near(d, C.NOTICE_RADIUS)) {
-      d.swarm = true;
-      d.host = null;
-      d.sp = 0;
-    }
-    if (!d.swarm) continue;
-    count++;
-    d.orbit += dt * 1.4;
-    const tx = cx + Math.cos(d.orbit) * C.ORBIT_RADIUS - C.DEER_BOX.w / 2;
-    const ty = cy + Math.sin(d.orbit) * C.ORBIT_RADIUS - C.DEER_BOX.h / 2;
-    const vx = tx - d.x;
-    const vy = ty - d.y;
-    const len = Math.hypot(vx, vy) || 1;
-    const step = Math.min(len, C.SWARM_SPEED * dt);
-    d.x += (vx / len) * step;
-    d.y += (vy / len) * step;
-  }
-  s.swarmCount = count;
-
-  s.drainT -= dt;
-  if (s.drainT <= 0) {
-    s.drainT = C.ENCIRCLE_DRAIN;
-    takeSenbei(s, 0.5); // 囲まれて渡すぶんは点が安い。自分から当てにいくほうが得
-  }
-
-  if (s.senbei <= 0) release(s);
-}
-
-/** 1枚渡す。valueRatio で点の重みを変える。 */
-function takeSenbei(s: State, valueRatio: number): void {
-  if (s.senbei <= 0) return;
-  s.senbei--;
-  s.fed++;
-  s.feedChain = Math.min(C.FEED_CHAIN_MAX, s.feedChain + C.FEED_CHAIN_STEP);
-  s.feedChainT = C.FEED_CHAIN_WINDOW;
-  s.score += C.FEED_SCORE * s.mult * s.feedChain * valueRatio;
-  s.grazeGauge = Math.min(C.GRAZE_MAX, s.grazeGauge + C.FEED_GAUGE * valueRatio);
-  sfx.feed();
-}
-
-/** 囲みが解ける。鹿は興味を失って散る。 */
-function release(s: State): void {
-  s.encircled = false;
-  s.grace = C.ENCIRCLE_GRACE;
-  s.swarmCount = 0;
-
-  // 囲みが解けた瞬間、鹿は密着したまま「ふつうの鹿」に戻る。
-  // そのままだと目の前の数頭に立て続けに轢かれて、フンを一度も踏まずに終わる。
-  // 外へ散らしたうえで、離れるまでの無敵時間も与える。
-  const cx = s.px + C.PLAYER.w / 2;
-  const cy = s.py + C.PLAYER.h / 2;
-  for (const d of s.deer) {
-    if (!d.swarm) continue;
-    d.swarm = false;
-    d.sp = C.deerSpeed(s.dist) * C.TILE;
-    const dx = d.x + C.DEER_BOX.w / 2 - cx;
-    const dy = d.y + C.DEER_BOX.h / 2 - cy;
-    const len = Math.hypot(dx, dy) || 1;
-    d.x += (dx / len) * C.RELEASE_PUSH;
-    d.y += (dy / len) * C.RELEASE_PUSH;
-  }
-  s.inv = Math.max(s.inv, C.ENCIRCLE_GRACE);
-  banner(s, "せんべいが なくなった", 1.3);
-}
-
-function moveEntities(s: State, vpx: number, dt: number): void {
-  for (let i = s.poops.length - 1; i >= 0; i--) {
-    s.poops[i].y += vpx * dt;
-    if (s.poops[i].y > C.VIEW.h + 8) s.poops.splice(i, 1);
-  }
-  for (let i = s.pebbles.length - 1; i >= 0; i--) {
-    s.pebbles[i].y += vpx * dt;
-    if (s.pebbles[i].y > C.VIEW.h + 6) s.pebbles.splice(i, 1);
-  }
-  for (let i = s.trees.length - 1; i >= 0; i--) {
-    s.trees[i].y += vpx * dt;
-    if (s.trees[i].y > C.VIEW.h + 8) s.trees.splice(i, 1);
-  }
-  for (let i = s.stalls.length - 1; i >= 0; i--) {
-    s.stalls[i].y += vpx * dt;
-    if (s.stalls[i].y > C.VIEW.h + 8) s.stalls.splice(i, 1);
-  }
-  for (let i = s.shoes.length - 1; i >= 0; i--) {
-    s.shoes[i].y += vpx * dt;
-    if (s.shoes[i].y > C.VIEW.h + 8) s.shoes.splice(i, 1);
-  }
-  for (let i = s.baits.length - 1; i >= 0; i--) {
-    s.baits[i].y += vpx * dt;
-    s.baits[i].life -= dt;
-    if (s.baits[i].y > C.VIEW.h + 8) s.baits.splice(i, 1);
-  }
-
-  for (let i = s.tourists.length - 1; i >= 0; i--) {
-    const t = s.tourists[i];
-    // 餌やり中の観光客は立ち止まっているので、背景と同じ速さで下がる
-    t.y += vpx * (t.feeding ? 1 : 0.42) * dt;
-    if (!t.feeding) t.x += Math.sin(t.y * 0.03) * 6 * dt;
-    if (t.y > C.VIEW.h + 24) s.tourists.splice(i, 1);
-  }
-
-  for (let i = s.deer.length - 1; i >= 0; i--) {
-    const d = s.deer[i];
-    if (d.swarm) continue; // 群れは updateSwarm が動かす
-
-    if (d.kind === "pooper") updatePooper(s, d, dt);
-
-    if (d.kind === "scene" && d.host) {
-      // 観光客のまわりを回りながら、一緒に流れてくる
-      d.orbit += dt * 1.1;
-      d.x = d.host.x + Math.cos(d.orbit) * C.SCENE_RADIUS - 2;
-      d.y = d.host.y + Math.sin(d.orbit) * C.SCENE_RADIUS * 0.7;
-      if (!s.tourists.includes(d.host)) s.deer.splice(i, 1);
-      continue;
-    }
-
-    // **しゃがんでいるあいだは背景のスクロールも打ち消す。**
-    // これが無いと、止まっていても画面の下へ流れていって、
-    // 落とし終わる頃にはもう通り過ぎている（updatePooper が横移動を持つ）。
-    if (d.squat > 0) continue;
-    d.y += (vpx + d.sp) * dt;
-    d.x += d.vx * dt;
-
-    if (d.kind === "homing") {
-      const target = s.px - (C.DEER_BOX.w - C.PLAYER.w) / 2;
-      d.x += Math.max(-30 * dt, Math.min(30 * dt, (target - d.x) * 1.6 * dt));
-    }
-    if (d.y > C.VIEW.h + 24 || d.x < -40 || d.x > C.VIEW.w + 40) s.deer.splice(i, 1);
-  }
-}
-
-// ---------------------------------------------------------------- 被弾
-
-function hurt(s: State, amount: number, inv: number): boolean {
-  s.dirt += amount;
-  s.inv = inv;
-  s.grazeGauge *= C.GRAZE_KEEP_ON_HIT;
+/** 汚れが増える。3つでおしまい。 */
+function hurt(s: State, why: string, trip: number): void {
+  s.dirt++;
+  s.trip = trip;
+  banner(s, why, 0.9);
   if (s.dirt >= C.DIRT_MAX) {
     s.dirt = C.DIRT_MAX;
     s.phase = "over";
+    s.best = Math.max(s.best, Math.floor(s.score));
     sfx.over();
-    return true;
   }
-  return false;
 }
 
 /**
- * フンとの判定。当たり判定の外側 GRAZE_PAD px に入っただけなら「かすめた」。
- * 危ないところを通るほど倍率が伸びる——これがこのゲームの攻めの手。
+ * すれすれで切り替えたか。
+ * **早めに切り替えても普通に避けられる**ので、これは上乗せでしかない。
+ * 床は低いまま、天井だけ用意する。
  */
-function resolvePoops(s: State): boolean {
-  const hx = s.px + C.PLAYER.hitX;
-  const hy = s.py + C.PLAYER.hitY;
-  const gx = hx - C.GRAZE_PAD;
-  const gy = hy - C.GRAZE_PAD;
-  const gw = C.PLAYER.hitW + C.GRAZE_PAD * 2;
-  const gh = C.PLAYER.hitH + C.GRAZE_PAD * 2;
+function nice(s: State): boolean {
+  return s.t - s.lastLook < C.NICE_WINDOW;
+}
 
-  for (let i = s.poops.length - 1; i >= 0; i--) {
-    const p = s.poops[i];
-    const size = p.big ? C.BIG_PELLET : C.PELLET;
-    if (!overlap(gx, gy, gw, gh, p.x, p.y, size.w, size.h)) continue;
+export function step(s: State, dt: number): void {
+  if (s.phase !== "playing") return;
 
-    // 跳んでいるあいだはフンだけをすり抜ける。**鹿には当たる。**
-    // かすめ判定は生きているので、跳びながら稼ぐこともできる。
-    if (s.air <= 0 && overlap(hx, hy, C.PLAYER.hitW, C.PLAYER.hitH, p.x, p.y, size.w, size.h)) {
-      // **無敵のあいだは蹴散らして進む。**
-      // 前はここで何もせず素通りしていたので、無敵が切れた瞬間に
-      // まだ同じ塊の中にいて、そのまま次の1発をもらっていた。
-      // それでは猶予ではなく「先送り」でしかない。
-      if (s.inv > 0) {
-        s.poops.splice(i, 1);
-        continue;
+  s.t += dt;
+  s.bannerT -= dt;
+  s.stepping = Math.max(0, s.stepping - dt);
+
+  if (s.trip > 0) {
+    s.trip -= dt;
+    return; // 転んでいるあいだは世界が止まる。立て直す間を作る
+  }
+
+  const v = speed(s);
+  s.dist += v * dt;
+  s.score += v * dt * C.SCORE_PER_PX;
+  s.walkAcc += v * dt;
+
+  // 仕切りを目標へ寄せる
+  const want = s.down ? C.SPLIT_DOWN : C.SPLIT_AHEAD;
+  s.split += (want - s.split) * Math.min(1, C.SPLIT_SPEED * dt);
+
+  // ---- 流す ----
+  for (const p of s.poops) p.x -= v * dt;
+  for (const d of s.deer) d.x -= v * dt * 1.35; // 鹿は歩いて向かってくるぶん速い
+  for (const b of s.senbeis) b.x -= v * dt;
+  // 奥のものはゆっくり流れる（視差）。手前の木ほど速い。
+  for (const g of s.scenery) g.x -= v * dt * (g.kind === "treeFar" ? 0.22 : 0.5);
+
+  // ---- 通り過ぎた瞬間に決める ----
+  // **判定は「まんなかが自分を通り過ぎた瞬間」。**
+  // 最初は絵の後ろ端で見ていたが、鹿は26px幅もあるので、
+  // 判定が絵の左端まで来るころには**もう画面から出かかっていた**。
+  // その間ずっと「まだ決着していない鹿」が居ることになり、
+  // 上手く見ていても7秒で終わっていた。通り過ぎたと見えた時が、決着の時。
+  for (const p of s.poops) {
+    if (p.done || p.x + C.POOP_SIDE.w / 2 > C.KID_X) continue;
+    p.done = true;
+    if (s.down) {
+      s.dodges++;
+      s.stepping = 0.22;
+      sfx.step();
+      if (nice(s)) {
+        s.nices++;
+        s.score += C.NICE_SCORE;
+        banner(s, "すれすれ！", 0.6);
       }
-      s.poops.splice(i, 1);
-      s.slip = C.SLIP_POOP;
-      s.px += Math.random() < 0.5 ? -7 : 7;
+    } else {
       s.poopHits++;
       sfx.squish();
-      return hurt(s, C.DIRT_POOP, C.INV_POOP);
-    }
-
-    if (!p.grazed) {
-      p.grazed = true;
-      s.grazeCount++;
-      s.grazeGauge = Math.min(
-        C.GRAZE_MAX,
-        s.grazeGauge + (p.big ? C.GRAZE_GAIN_BIG : C.GRAZE_GAIN_SMALL),
-      );
-      s.score += (p.big ? C.GRAZE_SCORE_BIG : C.GRAZE_SCORE_SMALL) * s.mult;
-      sfx.graze(p.big);
+      hurt(s, "ふんだ", C.TRIP_POOP);
+      return;
     }
   }
-  return false;
-}
 
-/** 鹿との衝突。群れは押してくるだけなので当たらない。 */
-function resolveDeer(s: State): boolean {
-  if (s.inv > 0) return false;
-  const hx = s.px + C.PLAYER.hitX;
-  const hy = s.py + C.PLAYER.hitY;
-
-  for (let i = s.deer.length - 1; i >= 0; i--) {
-    const d = s.deer[i];
-    if (d.swarm) continue;
-    if (!overlap(
-      hx, hy, C.PLAYER.hitW, C.PLAYER.hitH,
-      d.x + C.DEER_BOX.hitX, d.y + C.DEER_BOX.hitY, C.DEER_BOX.hitW, C.DEER_BOX.hitH,
-    )) continue;
-
-    // せんべいを持っていれば、ぶつかった鹿に1枚渡して事なきを得る。
-    // 牡鹿だけは餌に興味がないので、これが効かない。
-    if (s.senbei > 0 && d.kind !== "stag") {
-      if (d.kind !== "sleeper" && d.kind !== "scene") s.deer.splice(i, 1);
-      takeSenbei(s, 1);
-      s.inv = 0.25; // 同じ鹿に連続で渡さないための最小間隔
-      if (s.senbei <= 0 && s.encircled) release(s);
-      return false;
-    }
-
-    const dirt = d.kind === "stag" ? C.STAG_DIRT : C.DIRT_DEER;
-    if (d.kind !== "sleeper" && d.kind !== "scene") s.deer.splice(i, 1);
-    s.stun = C.STUN_DEER;
-    s.knockback = C.KNOCKBACK_DEER;
-    s.deerHits++;
-    sfx.bump();
-    return hurt(s, dirt, C.INV_DEER);
-  }
-  return false;
-}
-
-/** 売り場の前を通ったら、せんべいを受け取る。判定は絵より広い。 */
-function resolveStalls(s: State): void {
-  const cx = s.px + C.PLAYER.w / 2;
-  const cy = s.py + C.PLAYER.h / 2;
-  for (const st of s.stalls) {
-    if (st.taken) continue;
-    const dx = Math.abs(st.x + C.STALL_BOX.w / 2 - cx);
-    const dy = Math.abs(st.y + C.STALL_BOX.h / 2 - cy);
-    if (dx > C.STALL_REACH_X || dy > C.STALL_REACH_Y) continue;
-    st.taken = true;
-    s.senbei = C.SENBEI_PER_STALL;
-    sfx.pickup();
-    banner(s, `せんべい ×${C.SENBEI_PER_STALL}　鹿にぶつかってOK`, 1.8);
-  }
-}
-
-/** 落ちているくつを拾う。汚れが1減る。満タンなら点だけ。 */
-function resolveShoes(s: State): void {
-  const cx = s.px + C.PLAYER.w / 2;
-  const cy = s.py + C.PLAYER.h / 2;
-  for (const sh of s.shoes) {
-    if (sh.taken) continue;
-    const dx = Math.abs(sh.x + C.SHOE_BOX.w / 2 - cx);
-    const dy = Math.abs(sh.y + C.SHOE_BOX.h / 2 - cy);
-    if (dx > C.SHOE_REACH || dy > C.SHOE_REACH) continue;
-    sh.taken = true;
-    s.score += C.SHOE_SCORE * s.mult;
-    sfx.pickup();
-    if (s.dirt > 0) {
-      s.dirt--;
-      banner(s, "あたらしい くつ", 1.4);
+  for (const d of s.deer) {
+    if (d.done || d.x + C.DEER_SIDE.w / 2 > C.KID_X) continue;
+    d.done = true;
+    if (!s.down) {
+      s.dodges++;
+      sfx.woosh();
+      if (nice(s)) {
+        s.nices++;
+        s.score += C.NICE_SCORE;
+        banner(s, "すれすれ！", 0.6);
+      }
     } else {
-      banner(s, "くつは まだきれい", 1.2);
+      s.deerHits++;
+      sfx.bump();
+      hurt(s, "しかに ぶつかった", C.TRIP_DEER);
+      return;
     }
   }
+
+  for (const b of s.senbeis) {
+    if (b.taken || b.x > C.KID_X + C.HIT_HALF) continue;
+    if (b.x + C.SENBEI.w < C.KID_X - C.HIT_HALF) { b.taken = true; continue; }
+    b.taken = true;
+    s.score += C.SENBEI_SCORE;
+    sfx.pickup();
+    banner(s, "せんべい", 0.6);
+  }
+
+  // ---- 画面から出たものを捨てる ----
+  s.poops = s.poops.filter((p) => p.x > -20);
+  s.deer = s.deer.filter((d) => d.x > -40);
+  s.senbeis = s.senbeis.filter((b) => b.x > -20);
+  s.scenery = s.scenery.filter((g) => g.x > -70);
+
+  spawn(s, dt);
 }
 
-// ---------------------------------------------------------------- 本体
+/**
+ * 出す。**右端から出して、届くまでの時間が反応時間を下回らないようにする。**
+ * 間隔だけを詰めていくので、速さと公平さが喧嘩しない。
+ */
+/**
+ * それが足元に届くまでの時間[s]。鹿は歩いて向かってくるぶん速く着く。
+ * ふたつの流れを引き離すのに使う。
+ */
+function arrival(x: number, isDeer: boolean, v: number): number {
+  return (x - C.KID_X) / (v * (isDeer ? 1.35 : 1));
+}
 
-export function step(s: State, input: InputState, dt: number): void {
-  if (s.phase !== "playing") {
-    // 遊んでいないあいだの「指を離した」は捨てる。
-    // 溜めておくと、走り出した1フレーム目でいきなり跳んで燃料が1つ減る。
-    input.jump = false;
-    return;
-  }
+/** いま出すと、反対側のものと近すぎないか。 */
+function tooClose(s: State, isDeer: boolean, v: number): boolean {
+  const mine = arrival(C.VIEW.w, isDeer, v);
+  const others = isDeer
+    ? s.poops.filter((p) => !p.done).map((p) => arrival(p.x, false, v))
+    : s.deer.filter((d) => !d.done).map((d) => arrival(d.x, true, v));
+  return others.some((o) => Math.abs(o - mine) < C.SEPARATION);
+}
 
-  const vpx = C.scrollSpeed(s.dist) * C.TILE;
-  const metres = (vpx * dt) / C.TILE;
-  s.progress += metres;
-  s.dist = s.mode === "stage" ? C.stageDifficulty(s.stage) + s.progress : s.progress;
-  s.scrollPx += vpx * dt;
-  s.walkAcc += vpx * dt;
+function spawn(s: State, dt: number): void {
+  const v = C.speedAhead(s.t);
 
-  // レベル。数字と一言で「上がったこと」を必ず見せる
-  s.bannerT -= dt;
-  const lv = C.levelOf(s.dist);
-  if (lv !== s.level) {
-    s.level = lv;
-    if (s.mode === "endless") {
-      const note = C.levelNote(lv);
-      banner(s, note ? `レベル ${lv} ／ ${note}` : `レベル ${lv}`, note ? 2.4 : 1.5);
-      sfx.levelUp();
-    }
-  }
-
-  if (!C.inRest(s.dist)) {
-    s.shoeTimer -= dt;
-    if (s.shoeTimer <= 0) {
-      spawnShoe(s);
-      s.shoeTimer = C.SHOE_INTERVAL_MIN + Math.random() * (C.SHOE_INTERVAL_MAX - C.SHOE_INTERVAL_MIN);
-    }
-  }
-
-  if (s.dist >= C.UNLOCK.stall && !C.inRest(s.dist)) {
-    s.stallTimer -= dt;
-    if (s.stallTimer <= 0) {
-      spawnStall(s);
-      s.stallTimer = C.STALL_INTERVAL_MIN + Math.random() * (C.STALL_INTERVAL_MAX - C.STALL_INTERVAL_MIN);
-    }
-  }
-
-  if (s.dist >= C.UNLOCK.scene && !C.inRest(s.dist)) {
-    s.sceneTimer -= dt;
-    if (s.sceneTimer <= 0) {
-      spawnFeedingScene(s);
-      s.sceneTimer = C.FEEDING_SCENE_INTERVAL_MIN
-        + Math.random() * (C.FEEDING_SCENE_INTERVAL_MAX - C.FEEDING_SCENE_INTERVAL_MIN);
-    }
-  }
-
-  if (s.mode === "endless") {
-    const restIndex = Math.floor(s.dist / C.REST_EVERY_M);
-    if (C.inRest(s.dist) && restIndex !== s.restShown) {
-      s.restShown = restIndex;
-      sfx.rest();
-    }
-  }
-
-  s.rowAcc += vpx * dt;
-  while (s.rowAcc >= C.TILE) {
-    s.rowAcc -= C.TILE;
-    spawnRow(s);
-  }
-
-  movePlayer(s, input, dt);
-  resolveTrees(s);
-
-  s.inv -= dt;
-  s.stun -= dt;
-  s.slip -= dt;
-
-  // ジャンプ。跳んでいるあいだは燃料が戻らない（押しっぱなしで浮けないように）。
-  s.air -= dt;
-  if (s.air <= 0) s.jumpFuel = Math.min(1, s.jumpFuel + C.JUMP_REGEN * dt);
-  if (input.jump) {
-    input.jump = false; // 押された1フレームぶんだけ効く
-    if (s.air <= 0 && s.stun <= 0 && s.jumpFuel >= C.JUMP_COST) {
-      s.air = C.JUMP_TIME;
-      s.jumpFuel -= C.JUMP_COST;
-      s.slip = 0;
-      sfx.jump();
-    }
-  }
-  s.grazeGauge *= Math.exp(-C.GRAZE_DECAY * dt);
-  s.mult = 1 + s.grazeGauge;
-
-  moveEntities(s, vpx, dt);
-  updateEncircle(s, dt);
-  s.feedChainT -= dt;
-  if (s.feedChainT <= 0) s.feedChain = 1;
-
-  // 予兆。牡鹿はためのあいだ狙いを合わせ続け、最後に固定する
-  for (let i = s.warns.length - 1; i >= 0; i--) {
-    const w = s.warns[i];
-    w.t -= dt;
-    if (w.kind === "stag" && w.t > 0.35) {
-      const target = s.px - (C.DEER_BOX.w - C.PLAYER.w) / 2;
-      w.x += Math.max(-120 * dt, Math.min(120 * dt, (target - w.x) * 3 * dt));
-    }
-    if (w.t > 0) continue;
-    hatchDeer(s, w, s.px);
-    s.warns.splice(i, 1);
-  }
-
+  s.poopTimer -= dt;
   s.deerTimer -= dt;
+  s.senbeiTimer -= dt;
+  s.sceneryTimer -= dt;
+
+  // **反対側と近すぎるときは出さずに待つ。**
+  // ここが無いと、たまたま同時に届く場面が年中生まれてしまう。
+  if (s.poopTimer <= 0 && tooClose(s, false, v)) s.poopTimer = 0.1;
+  if (s.deerTimer <= 0 && tooClose(s, true, v)) s.deerTimer = 0.1;
+
+  if (s.poopTimer <= 0) {
+    s.poops.push({
+      x: C.VIEW.w + 4,
+      y: Math.random(),
+      big: Math.random() < 0.25,
+      done: false,
+    });
+    s.poopTimer = Math.max(C.MIN_GAP, C.poopInterval(s.t) * (0.75 + Math.random() * 0.5));
+
+    // ときどき、鹿と重ねてくる。**両方は見られない場面をわざと作る。**
+    if (Math.random() < C.clashChance(s.t)) {
+      s.deer.push({ x: C.VIEW.w + 4 + Math.random() * 10, frame: 0, done: false });
+      s.clashSpawns++;
+      s.deerTimer = Math.max(s.deerTimer, C.deerInterval(s.t) * 0.8);
+    }
+  }
+
   if (s.deerTimer <= 0) {
-    scheduleDeer(s);
-    const w = s.warns[s.warns.length - 1];
-    if (w) (w.kind === "stag" ? sfx.paw : sfx.snort)();
+    s.deer.push({ x: C.VIEW.w + 6, frame: 0, done: false });
+    s.deerTimer = Math.max(C.MIN_GAP, C.deerInterval(s.t) * (0.75 + Math.random() * 0.5));
   }
 
-  // 観光客はレベルで出てくる。設定のオンオフではなく、奥へ行くほど参道が混む。
-  if (s.dist >= C.UNLOCK.tourist && !C.inRest(s.dist)) {
-    s.touristTimer -= dt;
-    if (s.touristTimer <= 0) {
-      s.tourists.push({ x: C.PATH.x0 + 4 + Math.random() * (C.PATH_W - 20), y: C.ENTRY_Y, feeding: false });
-      s.touristTimer = C.touristGap(s.dist) * (0.7 + Math.random() * 0.6);
-    }
+  if (s.senbeiTimer <= 0) {
+    s.senbeis.push({ x: C.VIEW.w + 4, taken: false });
+    s.senbeiTimer = C.SENBEI_INTERVAL_MIN
+      + Math.random() * (C.SENBEI_INTERVAL_MAX - C.SENBEI_INTERVAL_MIN);
   }
 
-  resolveStalls(s);
-  resolveShoes(s);
-  if (resolvePoops(s)) return;
-  if (resolveDeer(s)) return;
-
-  // 歩いている観光客は汚さない。ぶつかると押し戻されるだけ。
-  const hx = s.px + C.PLAYER.hitX;
-  const hy = s.py + C.PLAYER.hitY;
-  for (const t of s.tourists) {
-    if (t.feeding) continue;
-    if (overlap(hx, hy, C.PLAYER.hitW, C.PLAYER.hitH, t.x + 1, t.y + 9, 10, 9)) {
-      s.py = Math.min(C.PLAY_Y.bottom, s.py + 55 * dt);
-    }
+  if (s.sceneryTimer <= 0) {
+    const r = Math.random();
+    s.scenery.push({
+      x: C.VIEW.w + 8,
+      kind: r < 0.22 ? "lantern" : r < 0.58 ? "treeFar" : "tree",
+    });
+    s.sceneryTimer = 0.35 + Math.random() * 0.6;
   }
 
-  s.score += metres * C.SCORE_PER_M * s.mult;
-
-  if (s.mode === "stage" && s.progress >= s.goal) {
-    s.progress = s.goal;
-    s.phase = "clear";
-    sfx.clear();
-  }
 }
+
+export type { Deer, Poop };

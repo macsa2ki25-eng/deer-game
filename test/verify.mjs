@@ -1,15 +1,9 @@
 /**
  * 実ブラウザでの検証。`npm run verify` で走る。
  *
- * ここで見ているのは見た目ではなく、設計が主張している性質そのもの。
- *   - 安全回廊は本当に通れるのか（回廊をなぞるボットが無傷で走り切れるか）
- *   - 危険を冒すと本当に得なのか（縁を舐めるボットのグレイズが伸びるか）
- *   - 下手なら本当に死ぬのか
- *   - ステージ・アンロック・ランキングが繋がっているか
- *   - 新しい要素（ぶりぶり鹿・木・せんべい）が実際に出るか
- *
- * 過去に「回廊が塞がっていた」「倍率が一生上がらない」「鹿が種類だけ pooper で
- * 中身はただ歩いていた」を、すべてここで捕まえている。目視では気づけなかった。
+ * 見ているのは見た目ではなく、**設計が主張している性質そのもの**。
+ * このゲームでいちばん守りたいのは「位置合わせが無い」ことなので、
+ * そこを検査で縛ってある。
  */
 
 import { createServer } from "node:http";
@@ -19,21 +13,16 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const DIST = resolve(new URL("../dist", import.meta.url).pathname);
-const SHOTS = process.env.MTD_SHOTS ?? null;
 
 function loadPlaywright() {
   for (const p of ["playwright", "/opt/node22/lib/node_modules/playwright"]) {
-    try {
-      return require(p);
-    } catch {
-      /* 次の候補へ */
-    }
+    try { return require(p); } catch { /* 次の候補へ */ }
   }
-  console.error("playwright が見つかりません。`npm i -D playwright` か、グローバル導入が要ります。");
+  console.error("playwright が見つかりません。`npm i -D playwright` が要ります。");
   process.exit(2);
 }
 
-const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".map": "application/json" };
+const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
 
 async function serve() {
   const server = createServer(async (req, res) => {
@@ -51,767 +40,215 @@ async function serve() {
   return { server, port: server.address().port };
 }
 
-// ---------------------------------------------------------------- 結果の記録
-
 let failures = 0;
 function check(name, ok, extra = "") {
   console.log(`${ok ? "  ok  " : "  FAIL"} ${name}${extra ? `   ${extra}` : ""}`);
   if (!ok) failures++;
 }
-function section(title) {
-  console.log(`\n${title}`);
-}
-
-// ---------------------------------------------------------------- ボットの操縦
+function section(title) { console.log(`\n${title}`); }
 
 /**
- * 操縦は**ページの中で 60Hz で回す**。
+ * ページの中で 60Hz で走らせるボット。
+ * **視線しか操作しない**（このゲームには他に操作が無い）。
  *
- * 以前は Node 側から Playwright でマウスを動かしていたが、
- * 往復が1周50〜80msあり、それがそのまま操作の遅れになっていた。
- * つまり測っていたのは地形の公平さではなく**計測装置の遅さ**で、
- * 同じ地形が「被弾5回」にも「被弾0回」にもなった。
- *
- * いまは目標位置だけを毎フレーム与える。移動速度は LATERAL のままなので、
- * **本当の制約（速度上限）は残っている**。
- * 指の相対操作そのものは「指を置き直してもワープしない」で別に見ている。
+ * spec.look:
+ *   "perfect" … 次に来るものを見て、正しい側を見る
+ *   "ahead"   … ずっと前だけ見ている
+ *   "down"    … ずっと下だけ見ている
  */
 const BOT = `
 window.__bot = (spec) => new Promise((done) => {
   const M = window.__mtd, C = M.config, s = M.state;
-  const hist = [];
-  let lastRow = -1;
-  const seen = {
-    squat: 0, trees: 0, stalls: 0, maxSenbei: 0, fed: 0, banners: [],
-    sleepers: 0, scene: 0, herd: 0, maxSwarm: 0, baits: 0,
-    maxSpans: 0, repairs: 0, narrowest: 999,
-    minFuel: 1, shoes: 0, healed: 0, jumps: 0,
-    squatMaxY: -999, squatDrift: 0, poopOnSleeper: 0, tourists: 0,
-  };
-  // しゃがみ始めた位置。**1頭ごとに**見ないと、別々の鹿が別の場所で
-  // しゃがんだだけで「横に156px歩いた」ことになってしまう（実際そう出た）。
-  const squatFrom = new Map();
-  let lastDirt = 0;
-  const mults = [];
   const t0 = performance.now();
-
-  /** 足元の行が作られたときの thread。人が画面を見て選ぶのと同じ情報。 */
-  const lagged = () => {
-    const want = s.scrollPx - (s.py + C.PLAYER.hitY + C.PLAYER.hitH / 2);
-    let pick = hist[0];
-    for (let i = hist.length - 1; i >= 0; i--) if (hist[i].sp <= want) { pick = hist[i]; break; }
-    return pick || { t: s.px + C.PLAYER.w / 2, route: s.route };
-  };
-
-  /**
-   * **画面に見えているフンから、空いている区間を出す。**
-   *
-   * 生成器の持っている到達可能集合を覗くのはやめた。保証を切った以上あれは
-   * 「たまたま残っている集合」でしかなく、人が見て判断できるものでもない。
-   * 人がやっているのは「少し先まで見て、空いている筋を選ぶ」——そう書く。
-   */
-  const lanesAhead = (px) => {
-    const hy = s.py + C.PLAYER.hitY;
-    const y0 = hy - px;
-    const y1 = hy + C.PLAYER.hitH;
-    const half = C.PLAYER.hitW / 2 + 1;
-    const cuts = [];
-    for (const p of s.poops) {
-      const w = p.big ? C.BIG_PELLET.w : C.PELLET.w;
-      const h = p.big ? C.BIG_PELLET.h : C.PELLET.h;
-      if (p.y + h < y0 || p.y > y1) continue;
-      cuts.push([p.x - half, p.x + w + half]);
-    }
-    for (const t of s.trees) {
-      if (t.y + C.TREE_BOX.hitY + C.TREE_BOX.hitH < y0 || t.y + C.TREE_BOX.hitY > y1) continue;
-      cuts.push([t.x + C.TREE_BOX.hitX - half, t.x + C.TREE_BOX.hitX + C.TREE_BOX.hitW + half]);
-    }
-    for (const d of s.deer) {
-      if (d.kind !== "sleeper") continue;
-      if (d.y + C.DEER_BOX.hitY + C.DEER_BOX.hitH < y0 || d.y + C.DEER_BOX.hitY > y1) continue;
-      cuts.push([d.x + C.DEER_BOX.hitX - half, d.x + C.DEER_BOX.hitX + C.DEER_BOX.hitW + half]);
-    }
-    cuts.sort((a, b) => a[0] - b[0]);
-    const out = [];
-    let at = C.PATH.x0 + C.PLAYER.hitW / 2;
-    const end = C.PATH.x1 - C.PLAYER.hitW / 2;
-    for (const [a, b] of cuts) {
-      if (a > at) out.push({ a: at, b: Math.min(a, end) });
-      at = Math.max(at, b);
-    }
-    if (at < end) out.push({ a: at, b: end });
-    return out.filter((r) => r.b > r.a);
-  };
-
-  /**
-   * 「広くて、近い」隙間を選ぶ。遠回りは割に合わない。
-   * 拾い物（売り場・くつ）が前にあれば、そちらへ寄る隙間を優先する——人もそうする。
-   */
-  const pick = (spans, me, widthPull, pullTo) => {
-    let best = null;
-    let bestScore = -Infinity;
-    for (const r of spans) {
-      const w = r.b - r.a;
-      const mid = (r.a + r.b) / 2;
-      const target = pullTo === null ? me : pullTo;
-      const aim = Math.max(r.a + 3, Math.min(r.b - 3, target));
-      let score = Math.min(w, 70) * widthPull - Math.abs(aim - me);
-      if (pullTo !== null) score -= Math.abs(aim - pullTo) * 1.2;
-      if (score > bestScore) { bestScore = score; best = { r, aim, mid }; }
-    }
-    return best;
-  };
-
-  /**
-   * 前方にある拾い物。いちばん近いものの { x, ahead }。無ければ null。
-   * **既定では見に行かない。** 拾い物を取りに行くと寄り道のぶん踏むので、
-   * 「上手く歩けているか」を測る走行に混ぜると、比べているものがぼやける。
-   */
-  const wantItem = () => {
-    if (!spec.seekItems) return null;
-    let best = null;
-    let bestD = Infinity;
-    const consider = (x, w, y) => {
-      const ahead = s.py - y;
-      if (ahead < -10 || ahead > 150) return;
-      if (ahead < bestD) { bestD = ahead; best = { x: x + w / 2, ahead }; }
-    };
-    for (const st of s.stalls) if (!st.taken) consider(st.x, C.STALL_BOX.w, st.y);
-    for (const sh of s.shoes) if (!sh.taken) consider(sh.x, C.SHOE_BOX.w, sh.y);
-    return best;
-  };
-
-  /**
-   * 前方の鹿をよける。よけ切れないなら、そのまま行く（そこは難所）。
-   */
-  const dodgeDeer = (want) => {
-    let out = want;
-    for (const d of s.deer) {
-      const ahead = s.py - d.y;
-      if (ahead < -12 || ahead > 70) continue;
-      const dx = d.x + C.DEER_BOX.w / 2 - out;
-      if (Math.abs(dx) > 15) continue;
-      out += dx > 0 ? -22 : 22;
-    }
-    return Math.max(C.PATH.x0 + 8, Math.min(C.PATH.x1 - 8, out));
-  };
-
-  const steers = {
-    /** 上手い人の走り方。少し先まで見て、広くて近い隙間へ。 */
-    route: () => {
-      const me = s.px + C.PLAYER.w / 2;
-      const item = wantItem();
-      // すぐそこまで来た拾い物へは、隙間の都合を捨ててまっすぐ向かう。
-      // 人も「あと少しで届く」なら多少踏んでも取りに行く。
-      if (item && item.ahead < 80) return dodgeDeer(item.x);
-      const got = pick(lanesAhead(44), me, 0.6, item ? item.x : null);
-      return dodgeDeer(got ? got.aim : me);
-    },
-    /** いま足元だけを見て、いちばん広いところへ行く。先を見ない。 */
-    wide: () => {
-      const me = s.px + C.PLAYER.w / 2;
-      const got = pick(lanesAhead(6), me, 3, null);
-      return got ? got.mid : me;
-    },
-    /**
-     * 攻めた走り方。**通れるいちばん細い隙間を選ぶ。**
-     *
-     * この設計では「縁を舐める」が攻めではなかった。
-     * 広い隙間の縁に寄っても、かすめる壁は片側だけ。
-     * 逆に細い隙間を選ぶと**両側の壁をかすめる**ので、稼ぎも危険も上がる。
-     * 実測で、縁寄せは 0.54／真ん中は 0.68 グレイズ/m と逆転していた。
-     * 塊のあいだを縫う——テーマとも合っている。
-     */
-    graze: () => {
-      const me = s.px + C.PLAYER.w / 2;
-      let best = null;
-      let bestScore = Infinity;
-      for (const r of lanesAhead(44)) {
-        const w = r.b - r.a;
-        if (w < C.PLAYER.hitW + 3) continue;
-        const mid = (r.a + r.b) / 2;
-        const score = w + Math.abs(mid - me) * 0.35;
-        if (score < bestScore) { bestScore = score; best = r; }
-      }
-      if (!best) return me;
-      return dodgeDeer((best.a + best.b) / 2);
-    },
-    /** 何も見ずに振る。 */
-    blind: (t) => (C.PATH.x0 + C.PATH.x1) / 2 + Math.sin(t * 2.2) * 60,
-  };
+  const seen = { toggles: 0, maxDeer: 0, maxPoop: 0, clashes: 0, minLead: 99 };
+  let wasDown = null;
 
   const tick = () => {
     const t = (performance.now() - t0) / 1000;
     if (s.phase !== "playing" || t >= spec.seconds) {
-      const mean = mults.length ? mults.reduce((a, b) => a + b, 0) / mults.length : 0;
       done({
-        phase: s.phase, progress: s.progress, score: s.score, dirt: s.dirt,
-        graze: s.grazeCount, poopHits: s.poopHits, deerHits: s.deerHits,
-        senbei: s.senbei, encircled: s.encircled, swarmCount: s.swarmCount, viewH: C.VIEW.h,
-        ...seen, banners: seen.banners, mean,
-        perM: s.grazeCount / Math.max(1, s.progress),
+        phase: s.phase, t: s.t, dist: s.dist, score: s.score, dirt: s.dirt,
+        poopHits: s.poopHits, deerHits: s.deerHits, dodges: s.dodges, nices: s.nices,
+        clashSpawns: s.clashSpawns,
+        ...seen,
       });
       return;
     }
 
-    // くつを拾うと汚れが減る。減るのはそれだけなので、減った回数＝拾えた回数。
-    if (s.dirt < lastDirt) seen.healed++;
-    lastDirt = s.dirt;
-    seen.minFuel = Math.min(seen.minFuel, s.jumpFuel);
-    seen.shoes = Math.max(seen.shoes, s.shoes.length);
-
-    if (spec.immortal) s.dirt = 0;
-    if (spec.noDeer) { s.deer.length = 0; s.warns.length = 0; s.deerTimer = 9; }
-
-    const row = Math.floor(s.scrollPx / C.TILE);
-    if (row !== lastRow) {
-      lastRow = row;
-      hist.push({ sp: s.scrollPx, t: s.thread, route: s.route.map((r) => ({ a: r.a, b: r.b })) });
-      if (hist.length > 900) hist.shift();
-      seen.maxSpans = Math.max(seen.maxSpans, s.route.length);
-      if (s.repaired) seen.repairs++;
-      for (const r of s.route) seen.narrowest = Math.min(seen.narrowest, r.b - r.a);
+    // いちばん近い「まだ決着していない」もの
+    // ゲーム側と同じ「まんなかで判定」に合わせる。ここがずれていると、
+    // ボットは決着済みと思っているのにゲームはまだ待っている、が起きる。
+    let nextPoop = null, nextDeer = null;
+    for (const p of s.poops) if (!p.done && p.x + C.POOP_SIDE.w / 2 > C.KID_X) {
+      if (!nextPoop || p.x < nextPoop.x) nextPoop = p;
     }
+    for (const d of s.deer) if (!d.done && d.x + C.DEER_SIDE.w / 2 > C.KID_X) {
+      if (!nextDeer || d.x < nextDeer.x) nextDeer = d;
+    }
+    seen.maxPoop = Math.max(seen.maxPoop, s.poops.length);
+    seen.maxDeer = Math.max(seen.maxDeer, s.deer.length);
+    if (nextPoop && nextDeer && Math.abs(nextPoop.x - nextDeer.x) < 14) seen.clashes++;
 
-    mults.push(s.mult);
-    if (s.deer.some((d) => d.squat > 0)) seen.squat++;
-    // ぶりぶりは画面の上端でしないと、避ける時間が残らない。
-    // 止まった位置と、止まっているあいだに動いてしまった量を測る。
-    for (const d of s.deer) {
-      if (d.squat <= 0) { squatFrom.delete(d); continue; }
-      seen.squatMaxY = Math.max(seen.squatMaxY, d.y);
-      if (!squatFrom.has(d)) squatFrom.set(d, d.x);
-      seen.squatDrift = Math.max(seen.squatDrift, Math.abs(d.x - squatFrom.get(d)));
+    let down;
+    if (spec.look === "ahead") down = false;
+    else if (spec.look === "down") down = true;
+    else {
+      // 近いほうに合わせる。届くまでの距離で比べる。
+      const dp = nextPoop ? nextPoop.x + C.POOP_SIDE.w / 2 - C.KID_X : Infinity;
+      const dd = nextDeer ? (nextDeer.x + C.DEER_SIDE.w / 2 - C.KID_X) / 1.35 : Infinity;
+      down = dp < dd;
     }
-    // 寝ている鹿の絵にフンが重なっていないか。当たり判定ではなく見た目で見る。
-    for (const d of s.deer) {
-      if (d.kind !== "sleeper") continue;
-      const bx = d.x + C.SLEEPER_ART.dx;
-      const by = d.y + C.SLEEPER_ART.dy;
-      for (const q of s.poops) {
-        const w = q.big ? C.BIG_PELLET.w : C.PELLET.w;
-        const h = q.big ? C.BIG_PELLET.h : C.PELLET.h;
-        if (q.x + w > bx && q.x < bx + C.SLEEPER_ART.w
-          && q.y + h > by && q.y < by + C.SLEEPER_ART.h) seen.poopOnSleeper++;
-      }
-    }
-    seen.tourists = Math.max(seen.tourists, s.tourists.filter((t) => !t.feeding).length);
-    seen.trees = Math.max(seen.trees, s.trees.length);
-    seen.sleepers = Math.max(seen.sleepers, s.deer.filter((d) => d.kind === "sleeper").length);
-    seen.scene = Math.max(seen.scene, s.deer.filter((d) => d.kind === "scene").length);
-    seen.herd = Math.max(seen.herd, s.deer.filter((d) => d.kind === "walk" || d.kind === "homing").length);
-    seen.maxSwarm = Math.max(seen.maxSwarm, s.swarmCount);
-    seen.baits = Math.max(seen.baits, s.baits.length);
-    seen.stalls = Math.max(seen.stalls, s.stalls.length);
-    seen.maxSenbei = Math.max(seen.maxSenbei, s.senbei);
-    seen.fed = Math.max(seen.fed, s.fed);
-    if (s.bannerT > 0 && s.banner && !seen.banners.includes(s.banner)) seen.banners.push(s.banner);
+    if (wasDown !== null && down !== wasDown) seen.toggles++;
+    wasDown = down;
+    M.input.down = down;
 
-    // 目の前にフンがあれば跳ぶ。**保証を切った代わりの逃げ道**なので、
-    // これが効かないと詰む場面がそのまま理不尽になる。
-    if (spec.jump && s.air <= 0 && s.jumpFuel >= C.JUMP_COST) {
-      const hx = s.px + C.PLAYER.hitX;
-      const hy = s.py + C.PLAYER.hitY;
-      const soon = s.poops.some((p) => {
-        const w = p.big ? C.BIG_PELLET.w : C.PELLET.w;
-        return p.x < hx + C.PLAYER.hitW + 2 && p.x + w > hx - 2
-          && p.y < hy && p.y > hy - 26;
-      });
-      if (soon) { M.input.jump = true; seen.jumps++; }
-    }
-
-    const want = steers[spec.steer](t);
-    // **tx と ty は両方揃わないと1ミリも動かない**（game.ts の条件が && ）。
-    // ty を忘れていて、ボットが突っ立ったまま踏まれ続けていた。
-    if (Number.isFinite(want)) {
-      M.input.tx = want - C.PLAYER.w / 2;
-      M.input.ty = s.py;
-    }
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
 });
 `;
 
-async function drive(page, seconds, steer, opts = {}) {
+async function drive(page, seconds, look) {
   await page.evaluate(BOT);
-  return page.evaluate(
-    (spec) => window.__bot(spec),
-    {
-      seconds, steer,
-      noDeer: !!opts.noDeer, immortal: !!opts.immortal,
-      jump: !!opts.jump, seekItems: !!opts.seekItems,
-    },
-  );
+  return page.evaluate((spec) => window.__bot(spec), { seconds, look });
 }
 
-// ---------------------------------------------------------------- 本体
+// ---------------------------------------------------------------- 走らせる
 
-const { server, port } = await serve();
 const { chromium } = loadPlaywright();
+const { server, port } = await serve();
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
 
 const errors = [];
-page.on("console", (m) => {
-  if (m.type() === "error") errors.push(m.text());
-});
+page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
 page.on("pageerror", (e) => errors.push(e.message));
 
-const url = `http://127.0.0.1:${port}/?debug=1`;
-await page.goto(url, { waitUntil: "load" });
+await page.goto(`http://127.0.0.1:${port}/?debug=1`, { waitUntil: "load" });
 await page.evaluate(() => localStorage.clear());
 await page.reload({ waitUntil: "load" });
-await page.waitForTimeout(400);
+await page.waitForFunction(() => !!window.__mtd);
+
+const start = async () => {
+  await page.evaluate(() => window.__mtd.start());
+  await page.waitForTimeout(120);
+};
 
 // ---- 画面 ----
 section("画面");
 const geo = await page.evaluate(() => {
   const r = document.getElementById("screen").getBoundingClientRect();
-  const p = document.getElementById("pad").getBoundingClientRect();
-  return { w: r.width, h: r.height, pad: p.height, vw: window.innerWidth, vh: window.innerHeight };
+  return { w: r.width, h: r.height, vw: window.innerWidth, vh: window.innerHeight };
 });
-check("ゲーム画面が横幅いっぱい（左右に余白なし）", Math.abs(geo.w - geo.vw) <= 1,
+check("ゲーム画面が画面の高さを使い切っている", geo.h / geo.vh > 0.85,
   `${geo.w.toFixed(0)}×${geo.h.toFixed(0)} / 画面 ${geo.vw}×${geo.vh}`);
-check("下段に十分な高さが残る", geo.h / geo.vh < 0.5, `ゲーム画面は高さの ${(geo.h / geo.vh * 100).toFixed(0)}%`);
 
-// 数字をゲーム画面のHUDへ移した目的そのもの。
-// 下段からスコア表示が消えたぶんがパッドに回っていなければ、移した意味がない。
-// バナー（実機で50〜60px）を引いても、指で操作するのに十分な高さが残ること。
-const BANNER_PX = 60;
-check("操作パッドがゲーム画面より広い", geo.pad > geo.h,
-  `パッド ${geo.pad.toFixed(0)} / ゲーム画面 ${geo.h.toFixed(0)}`);
-check("バナーを置いてもパッドが残る", geo.pad - BANNER_PX > 200,
-  `バナー後 ${(geo.pad - BANNER_PX).toFixed(0)}px`);
-
-// ---- ステージ選択 ----
-section("ステージモード");
-await page.click("#btn-stage");
-await page.waitForTimeout(200);
-check("ステージが10面ならぶ", (await page.locator("#stage-list .stage-btn").count()) === 10);
-check("最初は1面だけ開いている", (await page.locator("#stage-list .stage-btn.locked").count()) === 9);
-check("エリア2以降はロック", (await page.locator("#area-list .area-btn.locked").count()) === 9);
-
-const pad = await page.locator("#pad").boundingBox();
-const reach = await page.evaluate(() => window.__mtd.reach);
-/**
- * 通り抜けられる1本（thread）をたどる。**上手い人の走り方。**
- *
- * 到達可能集合（route）のほうを追うと駄目だった。いま居る枝が
- * 先で行き止まっても、足元の集合を見ているうちは分からない。
- * 気づいた時にはもう戻れない——それは公平さの検査にならない。
- */
-const followRoute = (s, lag) => {
-  const t = lag.thread;
-  return (typeof t === "number" ? t : s.px + 6) - 6;
-};
-
-/** 同じ道を、真ん中ではなく縁ぎりぎりで通る。稼げるが踏む。 */
-const grazeRoute = (s, lag, t) => {
-  const spans = lag.route ?? [];
-  const mid = typeof lag.thread === "number" ? lag.thread : s.px + 6;
-  let here = null;
-  for (const r of spans) if (mid >= r.a && mid <= r.b) here = r;
-  const half = here ? Math.max(0, Math.min(14, (here.b - here.a) / 2 - 5)) : 0;
-  return mid + (Math.sin(t * 0.7) < 0 ? -half : half) - 6;
-};
-
-await page.locator("#stage-list .stage-btn").first().click();
-await page.waitForTimeout(200);
-const stage1 = await drive(page, 40, "route", { jump: true, seekItems: true });
-check("ステージ1をクリアできる", stage1.phase === "clear",
-  `${stage1.progress.toFixed(0)}m / よごれ ${stage1.dirt} / フン被弾 ${stage1.poopHits}`);
-await page.waitForTimeout(300);
-check("クリア画面に★が出る", await page.locator("#result-stars").isVisible());
-await page.click("#btn-back");
-await page.waitForTimeout(250);
-check("クリアすると次の面が開く", (await page.locator("#stage-list .stage-btn.locked").count()) === 8);
-
-// ---- エンドレスとランキング ----
-section("エンドレスとランキング");
-await page.click("#btn-back-title");
-await page.waitForTimeout(150);
-await page.click("#btn-endless");
-await page.waitForTimeout(200);
-const reckless = await drive(page, 60, "blind");
-check("下手に歩けば終わる", reckless.phase === "over", `${reckless.progress.toFixed(0)}m`);
-await page.waitForTimeout(300);
-check("ランキングに記録される", (await page.locator("#rank-list2 li").count()) >= 1);
-await page.reload({ waitUntil: "load" });
-await page.waitForTimeout(400);
-check("再読み込みしても残る", (await page.locator("#rank-list li:not(.empty)").count()) >= 1);
-
-// ---- 新しい要素 ----
-section("ペース");
-/**
- * **階段の長さそのものを主張として置く。**
- *
- * v0.12 まで、最後の解禁（観光客）は 600m＝148秒だった。
- * 実測の走行中央値は 126m／42秒なので、ほとんどの人は
- * 7段ある階段の最初の2段しか見ずに終わっていた。
- * ここを検査に入れておかないと、また同じ形で伸びる。
- */
-const pace = await page.evaluate(() => {
-  const C = window.__mtd.config;
-  const last = Math.max(...Object.values(C.UNLOCK));
-  let t = 0;
-  for (let d = 0; d < last; d += 0.25) t += 0.25 / C.scrollSpeed(d);
-  return { last, secs: t, levelM: C.LEVEL_M };
-});
-check("最後の解禁までが 100秒以内", pace.secs < 100,
-  `${pace.last}m / ${pace.secs.toFixed(0)}秒`);
-
-/**
- * 難しさは距離だけで決まる。レベルの刻みを変えても動いてはいけない。
- *
- * **これはソースで見るしかない。** 実行時に `levelOf` を差し替えて
- * 難易度カーブが動かないことを確かめようとしたが、ESモジュールの束縛は
- * 書き換えられず `Cannot redefine property` で落ちる。
- * 主張の実体は「難易度カーブが levelOf を呼ばない」なので、そこを直接見る。
- */
-const configSrc = (await readFile(resolve(DIST, "../src/config.ts"), "utf8"))
-  .replace(/\/\*[\s\S]*?\*\//g, "")   // ブロックコメント
-  .replace(/\/\/.*$/gm, "");            // 行コメント（説明文の中の levelOf を数えない）
-const levelCalls = [...configSrc.matchAll(/(?<!function\s)levelOf\s*\(/g)].length;
-check("難易度カーブが levelOf を呼んでいない", levelCalls === 0,
-  `config.ts の呼び出し ${levelCalls} 箇所`);
-
-section("レベルで増える要素");
-
-/** 毎回まっさらな走行から始める。前の検査で死んでいると次が空振りするため。 */
-async function probe(seconds, progress, tweak = null) {
-  await page.evaluate(() => window.__mtd.startEndless());
-  await page.waitForTimeout(140);
-  await page.evaluate((p) => { window.__mtd.state.progress = p; }, progress);
-  if (tweak) await page.evaluate(tweak);
-  return drive(page, seconds, "route", { immortal: true, seekItems: true, jump: true });
-}
-
-const lvUp = await probe(12, 95);
-check("レベルアップが画面に出る", lvUp.banners.length > 0, lvUp.banners.join(" / "));
-
-const pooper = await probe(20, 250);
-check("鹿が道でフンをする", pooper.squat > 0, `しゃがんだフレーム ${pooper.squat}`);
-// 入ってきた場所で止まると、そのフンが届く頃にはもう避け終わった後ろにある。
-// 上端で止まって初めて「避ける時間」が丸ごと残る。
-check("ぶりぶりは画面の上端でする", pooper.squatMaxY >= 0 && pooper.squatMaxY < 26,
-  `いちばん下でも y=${pooper.squatMaxY.toFixed(1)}（画面は 0〜${pooper.viewH ?? 176}）`);
-// 横に歩かせてみたが、鹿が意味も無くうろついて見えただけだった。
-// いまは立ち止まって、出したものが流れて縦の帯になる。
-check("ぶりぶり中は立ち止まっている", pooper.squat > 0 && pooper.squatDrift < 1,
-  `1頭あたり横に ${pooper.squatDrift.toFixed(1)}px`);
-/**
- * 跡が「お尻の真下の縦の帯」になっているか。
- *
- * 地面には生成器の置いたフンも流れているので、**出てきた瞬間の y** で見分ける。
- * 生成器は画面の上（BASE_Y ≒ -6）に置き、鹿のお尻は y≒15。混ざらない。
- */
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(150);
-const trail = await page.evaluate(async () => {
-  const M = window.__mtd, s = M.state, C = M.config;
-  s.progress = 300; s.dist = 300;
-  s.deer.length = 0; s.warns.length = 0; s.deerTimer = 999;
-  s.px = 180; s.py = 150; // 鹿とぶつからない場所へ避ける
-  const x0 = 60;
-  s.deer.push({
-    x: x0, y: C.ENTRY_Y, kind: "pooper", sp: C.deerSpeed(300) * C.TILE, vx: 0,
-    squat: 0, dropIn: 0, dropsLeft: C.POOPER_PELLETS,
-    swarm: false, orbit: 0, lockX: x0, host: null,
-  });
-  const seen = new Set();
-  const mine = [];
-  let cx = x0 + C.DEER_BOX.w / 2;
-  let squatted = false;
-  for (let i = 0; i < 400; i++) {
-    await new Promise((r) => requestAnimationFrame(r));
-    const d = s.deer.find((q) => q.kind === "pooper");
-    if (d && d.squat > 0) { squatted = true; cx = d.x + C.DEER_BOX.w / 2; }
-    for (const q of s.poops) {
-      if (seen.has(q)) continue;
-      seen.add(q);
-      // 生まれたてで、位置が鹿のお尻あたり＝この鹿が出したもの
-      if (q.y > 8) mine.push({ x: q.x + C.PELLET.w / 2, y: q.y });
-    }
-    if (squatted && (!d || d.squat <= 0)) break;
-  }
-  const offs = mine.map((q) => Math.abs(q.x - cx));
-  return {
-    n: mine.length,
-    maxOff: offs.length ? Math.max(...offs) : -1,
-    ys: mine.length ? Math.max(...mine.map((q) => q.y)) - Math.min(...mine.map((q) => q.y)) : 0,
-  };
-});
-check("フンはお尻の真下に出る", trail.n > 10 && trail.maxOff >= 0 && trail.maxOff < 12,
-  `${trail.n}粒 / 中心から最大 ${trail.maxOff.toFixed(1)}px`);
-
-const trees = await probe(16, 460);
-check("木が出て道が狭まる", trees.trees > 0, `同時に最大 ${trees.trees} 本`);
-
-const crowded = await probe(20, 520);
-check("鹿が群れで歩いてくる", crowded.herd >= 3, `同時に最大 ${crowded.herd} 頭`);
-check("寝ている群れが道を塞ぐ", crowded.sleepers > 0, `最大 ${crowded.sleepers} 頭`);
-// 鹿の背中からフンが生えて見えていた。当たり判定ではなく絵で重なりを見る。
-check("寝ている鹿にフンが重ならない", crowded.poopOnSleeper === 0,
-  `重なり ${crowded.poopOnSleeper} 回`);
-check("せんべいを持った観光客に鹿がたかる", crowded.scene >= 4, `最大 ${crowded.scene} 頭`);
-
-// 観光客は設定のオンオフではなく、距離で出てくる（v0.12）。
-// 距離は定数から引く。埋め込むと、解禁を前倒ししたときに黙って外れる
-// （v0.13 でまさに外れた。450m は「まだ出ない」から「もう出る」に変わった）。
-const touristM = await page.evaluate(() => window.__mtd.config.UNLOCK.tourist);
-const beforeTourist = await probe(14, Math.max(0, touristM - 140));
-const afterTourist = await probe(14, touristM + 700);
-check(`観光客は ${touristM}m まで出ない`, beforeTourist.tourists === 0,
-  `${touristM - 140}m で ${beforeTourist.tourists} 人`);
-check(`${touristM}m から観光客が歩いている`, afterTourist.tourists > 0,
-  `${touristM + 700}m で 同時に最大 ${afterTourist.tourists} 人`);
-
-section("鹿せんべい");
-const senbei = await probe(20, 600, () => { window.__mtd.state.stallTimer = 0.1; });
-check("売り場が出る", senbei.stalls > 0);
-check("通ると10枚もらえる", senbei.maxSenbei === 10, `最大 ${senbei.maxSenbei} 枚`);
-check("鹿にぶつかると1枚渡して無事", senbei.fed > 0, `${senbei.fed} 頭に給餌`);
-
-// 囲まれて、枚数が尽きると解ける
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(140);
-const caught = await page.evaluate(async () => {
-  const s = window.__mtd.state;
-  s.progress = 620;
-  s.senbei = 4;
-  // 群れの真ん中に踏み込んだ状況を作る（歩いて突っ込む操作までは再現しない）
-  const C = window.__mtd.config;
-  for (let i = 0; i < 4; i++) {
-    s.deer.push({
-      x: s.px - 10 + i * 9, y: s.py - 12 + (i % 2) * 8, kind: "walk",
-      sp: 0, vx: 0, squat: 0, dropIn: 0, dropsLeft: 0,
-      swarm: false, orbit: i, lockX: 0, host: null,
-    });
-  }
-  void C;
-  const t0 = performance.now();
-  let sawEncircled = false;
-  let maxSwarm = 0;
-  while (performance.now() - t0 < 9000) {
-    s.dirt = 0;
-    if (s.encircled) sawEncircled = true;
-    maxSwarm = Math.max(maxSwarm, s.swarmCount);
-    if (sawEncircled && !s.encircled) break;
-    await new Promise((r) => setTimeout(r, 40));
-  }
-  return { sawEncircled, maxSwarm, senbei: s.senbei, encircled: s.encircled };
-});
-check("群れに触れると囲まれる", caught.sawEncircled, `最大 ${caught.maxSwarm} 頭`);
-check("枚数が尽きると解ける", !caught.encircled && caught.senbei === 0,
-  `残り ${caught.senbei} 枚`);
-
+// ---- 操作 ----
 section("操作");
-// 指を離して別の場所に置き直しても、キャラがそこへ飛ばないこと
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(200);
-const relative = await (async () => {
-  await page.mouse.move(pad.x + pad.width * 0.5, pad.y + pad.height * 0.5);
-  await page.mouse.down();
-  await page.waitForTimeout(400);
-  await page.mouse.up();
-  const before = await page.evaluate(() => window.__mtd.state.px);
-  // 遠く離れた場所を押し直す
-  await page.mouse.move(pad.x + pad.width * 0.05, pad.y + pad.height * 0.9);
-  await page.mouse.down();
-  await page.waitForTimeout(220);
-  const after = await page.evaluate(() => window.__mtd.state.px);
-  await page.mouse.up();
-  return Math.abs(after - before);
-})();
-check("指を置き直してもワープしない", relative < 12, `ずれ ${relative.toFixed(1)}px`);
-
 /**
- * **指を動かした量だけ、キャラも画面の上で動くか。**
- *
- * 前は「パッド全体＝可動域いっぱい」に合わせていたので、
- * 横0.86倍・縦0.50倍で、しかも縦横で倍率が違った。
- * 斜めに払うと別の角度へ、動かした量より短く動く——
- * 「指にキャラがついてこない」の正体はこれ。いまは縦横とも1:1。
+ * **このゲームでいちばん守りたい主張。**
+ * 指が座標を持っていたら、失敗は必ず「あと3px」になる。
  */
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(200);
-const follow = await (async () => {
-  const scale = await page.evaluate(() => {
-    const r = document.getElementById("screen").getBoundingClientRect();
-    return r.width / window.__mtd.config.CANVAS.w; // 画面px / ゲームpx
-  });
-  const measure = async (dx, dy) => {
-    // 可動域の真ん中から測る。端に貼り付いた状態から測ると、
-    // 動かない理由が「倍率」なのか「壁」なのか区別できない。
-    await page.evaluate(() => {
-      const M = window.__mtd, C = M.config;
-      M.state.px = (C.PATH.x0 + C.PATH.x1 - C.PLAYER.w) / 2;
-      M.state.py = (C.PLAY_Y.top + C.PLAY_Y.bottom) / 2;
-      M.input.tx = null;
-      M.input.ty = null;
-    });
-    await page.mouse.move(pad.x + pad.width * 0.5, pad.y + pad.height * 0.5);
-    await page.mouse.down();
-    const before = await page.evaluate(() => ({ x: window.__mtd.state.px, y: window.__mtd.state.py }));
-    // ゆっくり動かす（速度上限に当てないため。上限そのものは別の主張）
-    await page.mouse.move(pad.x + pad.width * 0.5 + dx, pad.y + pad.height * 0.5 + dy, { steps: 24 });
-    await page.waitForTimeout(320);
-    const after = await page.evaluate(() => ({ x: window.__mtd.state.px, y: window.__mtd.state.py }));
-    await page.mouse.up();
-    await page.waitForTimeout(60);
-    return { x: (after.x - before.x) * scale, y: (after.y - before.y) * scale };
-  };
-  const h = await measure(90, 0);
-  const v = await measure(0, 80);
-  return { hx: h.x, vy: v.y };
-})();
-check("指を動かした量だけキャラも動く（横）", Math.abs(follow.hx - 90) < 12,
-  `指90px に対して ${follow.hx.toFixed(0)}px`);
-check("指を動かした量だけキャラも動く（縦）", Math.abs(follow.vy - 80) < 12,
-  `指80px に対して ${follow.vy.toFixed(0)}px`);
+const inputSrc = await readFile(resolve(DIST, "../src/input.ts"), "utf8");
+const usesCoords = /clientX|clientY|offsetX|offsetY|getBoundingClientRect/.test(inputSrc);
+check("操作が座標を一切読んでいない", !usesCoords);
 
-// ジャンプにボタンは無い。避けている最中に別のボタンへ親指を移す余裕が無かった。
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(200);
-const lift = await (async () => {
-  await page.evaluate(() => { window.__mtd.state.jumpFuel = 1; window.__mtd.state.air = 0; });
-  await page.mouse.move(pad.x + pad.width * 0.5, pad.y + pad.height * 0.5);
-  await page.mouse.down();
-  await page.waitForTimeout(200);
-  const midAir = await page.evaluate(() => window.__mtd.state.air);
-  await page.mouse.up();
-  await page.waitForTimeout(80);
-  const afterUp = await page.evaluate(() => window.__mtd.state.air);
-  // 跳んでいる最中に触り直して、そのまま動かせるか
-  const x0 = await page.evaluate(() => window.__mtd.state.px);
-  await page.mouse.move(pad.x + pad.width * 0.5, pad.y + pad.height * 0.5);
-  await page.mouse.down();
-  await page.mouse.move(pad.x + pad.width * 0.85, pad.y + pad.height * 0.5, { steps: 6 });
-  await page.waitForTimeout(160);
-  const moved = await page.evaluate(() => ({ px: window.__mtd.state.px, air: window.__mtd.state.air }));
-  await page.mouse.up();
-  const buttonHiddenByDefault = await page.evaluate(() => document.getElementById("jump").hidden);
-  return { midAir, afterUp, buttonHiddenByDefault,
-    movedWhileAir: moved.air > 0 && Math.abs(moved.px - x0) > 8 };
-})();
-check("なぞっているあいだは跳ばない", lift.midAir <= 0, `air ${lift.midAir.toFixed(2)}`);
-check("指を離すと跳ぶ", lift.afterUp > 0, `air ${lift.afterUp.toFixed(2)}`);
-check("跳んでいる最中でも触り直せば動ける", lift.movedWhileAir);
-
-// 「はなす」が合わない人のために、ボタンも選べる。選んだら**離しても跳ばない**。
-const byButton = await (async () => {
-  await page.evaluate(() => {
-    const r = [...document.querySelectorAll('input[name="jumpmode"]')].find((x) => x.value === "button");
-    r.checked = true;
-    r.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-  const hidden = await page.evaluate(() => document.getElementById("jump").hidden);
-  await page.evaluate(() => window.__mtd.startEndless());
-  await page.waitForTimeout(200);
-  await page.evaluate(() => { window.__mtd.state.jumpFuel = 1; window.__mtd.state.air = 0; });
-  await page.mouse.move(pad.x + pad.width * 0.5, pad.y + pad.height * 0.5);
-  await page.mouse.down();
-  await page.waitForTimeout(160);
-  await page.mouse.up();
-  await page.waitForTimeout(120);
-  const afterRelease = await page.evaluate(() => window.__mtd.state.air);
-  const b = await page.locator("#jump").boundingBox();
-  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
-  await page.mouse.down();
-  await page.waitForTimeout(120);
-  await page.mouse.up();
-  const afterButton = await page.evaluate(() => window.__mtd.state.air);
-  // 元に戻す（このあとの走行は既定の「はなす」で測りたい）
-  await page.evaluate(() => {
-    const r = [...document.querySelectorAll('input[name="jumpmode"]')].find((x) => x.value === "release");
-    r.checked = true;
-    r.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-  return { hidden, afterRelease, afterButton };
-})();
-check("既定ではボタンを出さない", lift.buttonHiddenByDefault);
-check("「ボタン」を選ぶとボタンが出る", byButton.hidden === false);
-check("「ボタン」のときは離しても跳ばない", byButton.afterRelease <= 0,
-  `air ${byButton.afterRelease.toFixed(2)}`);
-check("「ボタン」を押すと跳ぶ", byButton.afterButton > 0, `air ${byButton.afterButton.toFixed(2)}`);
-
-// ---- 保証を切ったあとの手ざわり（ここが本丸） ----
-
-/**
- * 比べる走行は**全部おなじ長さで回す**（immortal＝汚れを毎フレーム0に戻す）。
- * 早死にすると距離も回数も短くなり、「上手いから被弾が少ない」のか
- * 「すぐ死んだから被弾が少ない」のか区別が付かなくなる。実際それで数字が揺れた。
- * 生き残れるかどうかは、下の「走り切れる」で別に見る。
- */
-const fair = { noDeer: true, jump: true, immortal: true };
-
-section("回廊はもう無い");
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(150);
-const corridor = await drive(page, 60, "route", fair);
-
-// v0.11 で SAFE_ROUTE を false にした。塞がった行を開ける処理が
-// 一度でも走っていたら、それはまだ「必ず通れる道」を引いているということ。
-check("通り道の保証は切れている（1行も開けていない）", corridor.repairs === 0,
-  `開けた行 ${corridor.repairs}`);
-check("それでも道は枝分かれして続く", corridor.maxSpans >= 2,
-  `同時に最大 ${corridor.maxSpans} 本`);
-
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(150);
-const alive = await drive(page, 40, "route", { noDeer: true, jump: true });
-// 保証が無いので被弾ゼロは主張できない。主張できるのは
-// 「見て選んで跳べば、40秒走り切れる」——理不尽ではない、まで。
-check("上手く歩けば走り切れる", alive.phase === "playing",
-  `${alive.progress.toFixed(0)}m / フン被弾 ${alive.poopHits}`);
-
-section("ジャンプ");
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(150);
-const nojump = await drive(page, 60, "route", { noDeer: true, immortal: true });
-check("ジャンプがあると踏まずに済む", nojump.poopHits > corridor.poopHits,
-  `跳ばない ${nojump.poopHits} / 跳ぶ ${corridor.poopHits}`);
-check("ジャンプは連発できない", corridor.minFuel < 0.99 && corridor.jumps > 3,
-  `${corridor.jumps} 回 / 燃料は最低 ${(corridor.minFuel * 100).toFixed(0)}%`);
-
-section("新しいくつ");
-// 出る間隔（42〜78秒）そのものは定数なので、ここで見たいのは
-// 「出たら拾えて、拾ったら汚れが戻るか」。待ち時間だけ縮めて確かめる。
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(150);
-await page.evaluate(() => {
-  const s = window.__mtd.state;
-  s.progress = 60; s.dist = 60; s.shoeTimer = 2; s.dirt = 2;
+await start();
+const toggled = await page.evaluate(async () => {
+  const M = window.__mtd;
+  const el = document.getElementById("stage");
+  const send = (type, x, y) => el.dispatchEvent(new PointerEvent(type, {
+    pointerId: 1, bubbles: true, clientX: x, clientY: y,
+  }));
+  // **画面の隅を押しても真ん中を押しても同じでなければならない。**
+  send("pointerdown", 5, 5);
+  const a = M.input.down;
+  send("pointerup", 5, 5);
+  const b = M.input.down;
+  send("pointerdown", 380, 800);
+  const c = M.input.down;
+  send("pointerup", 380, 800);
+  return { corner: a, released: b, farCorner: c };
 });
-const shoes = await drive(page, 45, "route", { noDeer: true, jump: true, seekItems: true });
-check("新しいくつが落ちている", shoes.shoes > 0, `同時に最大 ${shoes.shoes} 足`);
-check("拾うと汚れが1もどる", shoes.healed > 0, `${shoes.healed} 回`);
+check("押すと下を見る", toggled.corner === true);
+check("離すと前を見る", toggled.released === false);
+check("画面のどこを押しても同じ", toggled.farCorner === true);
 
-section("広く見えるほうが正解とはかぎらない");
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(150);
-const wide = await drive(page, 60, "wide", fair);
-check("いちばん広い隙間を選ぶと先で詰まる", wide.poopHits > corridor.poopHits,
-  `被弾 ${wide.poopHits} 対 続く道 ${corridor.poopHits}`);
+// ---- 公平さ ----
+section("理不尽にしないための仕掛け");
+const lead = await page.evaluate(() => {
+  const C = window.__mtd.config;
+  let min = Infinity;
+  for (let t = 0; t < 400; t += 2) min = Math.min(min, C.leadTime(t));
+  return min;
+});
+check("出てから届くまで、いちばん速いときでも反応時間より長い", lead > 0.45 + 0.25,
+  `${lead.toFixed(2)}秒（反応時間の下限 0.45秒）`);
 
-section("攻めと守り");
-await page.evaluate(() => window.__mtd.startEndless());
-await page.waitForTimeout(150);
-const graze = await drive(page, 60, "graze", fair);
-check("細い隙間を選ぶほど稼げる", graze.perM > corridor.perM * 1.25,
-  `細い ${graze.perM.toFixed(2)} / 広い ${corridor.perM.toFixed(2)} グレイズ/m`
-  + `（倍率は ×${graze.mean.toFixed(2)} 対 ×${corridor.mean.toFixed(2)}）`);
-check("そのぶん危ない", graze.poopHits > corridor.poopHits,
-  `被弾 ${graze.poopHits} 対 ${corridor.poopHits}`);
-check("倍率が意味のある値まで伸びる", graze.mean > 1.25,
-  `平均 ×${graze.mean.toFixed(2)}`);
+// 足元のばらつきは見た目だけ。当たりに効いていたら、位置合わせが復活している。
+const gameSrc = await readFile(resolve(DIST, "../src/game.ts"), "utf8");
+const noYInHit = !/\bp\.y\b/.test(gameSrc);
+check("当たり判定がフンの縦位置を見ていない", noYInHit);
 
-if (SHOTS) await page.screenshot({ path: `${SHOTS}/verify-full.png` });
-await browser.close();
-server.close();
+await start();
+const perfect = await drive(page, 25, "perfect");
+/**
+ * **上手い人が食うのは、game がわざと重ねた場面だけであるべき。**
+ *
+ * ここが最初 9秒で終わっていた。フンと鹿を別々のタイマーで出していたので、
+ * 「たまたま同時に届く」が年中起きていたため。意図した重なり以外は、
+ * かならず切り替える余地が残っていなければならない（SEPARATION）。
+ */
+const perfectHits = perfect.poopHits + perfect.deerHits;
+check("正しい側を見ていれば、わざと重ねた場面でしか当たらない",
+  perfectHits <= perfect.clashSpawns,
+  `被弾${perfectHits} / わざと重ねた回数${perfect.clashSpawns} / ${perfect.dodges}回よけた`);
+check("避けようのない場面がちゃんと起きる", perfect.clashSpawns > 0,
+  `${perfect.clashSpawns} 回`);
+
+await start();
+const onlyAhead = await drive(page, 30, "ahead");
+check("前だけ見ていると踏んで終わる", onlyAhead.phase === "over" && onlyAhead.poopHits > 0,
+  `${onlyAhead.dist.toFixed(0)}px / フン${onlyAhead.poopHits} 鹿${onlyAhead.deerHits}`);
+
+await start();
+const onlyDown = await drive(page, 30, "down");
+check("下だけ見ていると鹿にぶつかって終わる", onlyDown.phase === "over" && onlyDown.deerHits > 0,
+  `${onlyDown.dist.toFixed(0)}px / フン${onlyDown.poopHits} 鹿${onlyDown.deerHits}`);
+
+// ---- 速さが risk/reward を兼ねる ----
+section("前を見ると速い");
+const speeds = await page.evaluate(() => {
+  const C = window.__mtd.config;
+  return { ahead: C.speedAhead(0), down: C.speedAhead(0) * C.SLOW_FACTOR };
+});
+check("下を向くと足が遅くなる", speeds.down < speeds.ahead * 0.8,
+  `${speeds.ahead.toFixed(0)} → ${speeds.down.toFixed(0)} px/s`);
+
+// 距離そのものではなく **1秒あたり** で比べる。
+// どちらも3つ汚れたら終わるので、総距離だと「死ぬまでの長さ」に引っぱられる。
+await start();
+const ra = await drive(page, 12, "ahead");
+await start();
+const rd = await drive(page, 12, "down");
+const vA = ra.dist / Math.max(0.1, ra.t);
+const vD = rd.dist / Math.max(0.1, rd.t);
+check("前を見ていたほうが、1秒あたり速く進む", vA > vD * 1.35,
+  `${vA.toFixed(0)} 対 ${vD.toFixed(0)} px/s`);
+
+// ---- 1回の長さ ----
+section("1回の長さ");
+await start();
+const run = await drive(page, 90, "perfect");
+check("上手く見ていれば30秒は走れる", run.t > 30 || run.phase === "playing",
+  `${run.t.toFixed(0)}秒 / ${run.dist.toFixed(0)}px / くつ${run.dirt}`
+  + ` / わざと重ねた回数${run.clashSpawns}`);
+check("視線を何度も切り替えることになる", run.toggles > 20, `${run.toggles} 回`);
 
 console.log("\nコンソールエラー:", errors.length ? errors : "なし");
 if (errors.length) failures += errors.length;
 console.log(failures === 0 ? "\nすべて通過" : `\n${failures} 件 失敗`);
+
+await browser.close();
+server.close();
 process.exit(failures === 0 ? 0 : 1);

@@ -9,267 +9,105 @@
 <style>
   :root{
     --bg:#11140e;
-    --panel:#1a2015;
-    --tile:#222a1b;
-    --line:#333d28;
     --ink:#e3e8da;
     --muted:#8d977f;
     --dim:#5e6751;
     --accent:#a87a4a;
-    --graze:#d8b45e;
-    --dirt:#c04a3a;
-    --font:"Hiragino Maru Gothic ProN","Yu Gothic UI","Yu Gothic",YuGothic,"Noto Sans JP",system-ui,sans-serif;
-    --num:ui-monospace,SFMono-Regular,Menlo,"Roboto Mono",monospace;
+    --line:#333d28;
+    --font:"Hiragino Maru Gothic ProN","Yu Gothic",system-ui,sans-serif;
   }
-  *{box-sizing:border-box}
-  html,body{height:100%;margin:0}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--font)}
   body{
-    background:var(--bg);color:var(--ink);font-family:var(--font);
-    overflow:hidden;touch-action:none;
+    display:flex;flex-direction:column;align-items:center;
     -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
-  }
-  #app{
-    height:100dvh;display:flex;flex-direction:column;align-items:center;
-    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    touch-action:none;overscroll-behavior:none;
   }
 
-  /* ---- 上段：ゲーム画面。横幅いっぱいに使い、左右に余白を作らない ---- */
-  #stage{position:relative;line-height:0;flex:none;width:100%}
+  /* バナー広告。指の来ない最上部だけ。ネイティブ側が実体を置く。 */
+  #ad{flex:none;width:100%;height:0}
+
+  /* **画面全部がゲームで、画面全部がボタン。**
+     押す/離すしか無いので、操作用の区画を切る必要がない。 */
+  #stage{
+    flex:1;width:100%;min-height:0;position:relative;
+    display:flex;align-items:center;justify-content:center;
+    background:var(--bg);cursor:pointer;
+  }
   #screen{
-    display:block;width:100%;height:auto;
+    display:block;max-width:100%;max-height:100%;
+    width:auto;height:100%;
     image-rendering:pixelated;image-rendering:crisp-edges;
-    background:#3f6b34;
   }
 
-  /* ---- 下段：スコアと操作パッド ---- */
-  /* 下段は操作パッドだけ。数字はゲーム画面の HUD に移した（src/render.ts） */
-  #panel{
-    flex:1;width:100%;max-width:560px;min-height:0;
-    display:flex;flex-direction:column;padding:6px 9px 9px;
+  /* 操作の案内。1回でも触ったら消える。 */
+  #hint{
+    position:absolute;left:0;right:0;bottom:8px;text-align:center;
+    font-size:12px;color:var(--muted);pointer-events:none;
+    transition:opacity .3s;letter-spacing:.06em;
   }
-  .label{font-size:10px;color:var(--dim);letter-spacing:.08em;line-height:1.4}
-  .value{font-family:var(--num);font-variant-numeric:tabular-nums;font-size:15px;line-height:1.25}
-  .value.big{font-size:clamp(20px,6.4vmin,30px);color:var(--graze);line-height:1.15}
-  .value small{font-size:10px;color:var(--muted);margin-left:2px}
+  #stage.touched #hint{opacity:0}
 
-  /* ジャンプボタン。既定では出さない（設定で「ボタン」を選んだときだけ）。
-     パッドの下いっぱいに置くのは、親指が自然に降りてくる位置だから。
-     操作は相対方式なので、指を離して押して掴み直しても位置が飛ばない。 */
-  #jump{
-    flex:none;height:64px;margin-top:7px;width:100%;position:relative;overflow:hidden;
-    border:1px solid var(--line);background:var(--tile);color:var(--ink);
-    font-size:15px;letter-spacing:.14em;padding:0;
-  }
-  /* 残量をボタンそのもので見せる。HUDの点と同じ情報を、押す場所の側にも置く */
-  #jump-fuel{
-    position:absolute;inset:0 100% 0 0;background:rgba(126,174,78,.30);
-    transition:right .08s linear;pointer-events:none;
-  }
-  #jump span{position:relative}
-  #jump.ready{border-color:var(--accent)}
-  #jump.empty{color:var(--dim)}
-  #jump:active{filter:brightness(1.35)}
-
-  #pad{
-    flex:1;min-height:150px;position:relative;touch-action:none;cursor:crosshair;overflow:hidden;
-    background:
-      linear-gradient(180deg,rgba(168,122,74,.10) 0%,transparent 42%),
-      repeating-linear-gradient(0deg,#1d2417 0 1px,transparent 1px 14px),
-      repeating-linear-gradient(90deg,#1d2417 0 1px,transparent 1px 14px),
-      var(--panel);
-    border:1px solid var(--line);
-  }
-  .pad-edge{position:absolute;left:0;right:0;text-align:center;font-size:9px;letter-spacing:.22em;color:var(--dim);pointer-events:none}
-  .pad-edge.top{top:4px}
-  .pad-edge.bottom{bottom:4px}
-  #pad-hint{
-    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-    color:var(--muted);font-size:12px;letter-spacing:.14em;pointer-events:none;transition:opacity .3s ease;
-  }
-  #pad.touched #pad-hint{opacity:0}
-  .marker{position:absolute;left:0;top:0;pointer-events:none}
-  #pad-body{width:11px;height:11px;margin:-5.5px 0 0 -5.5px;background:var(--accent);box-shadow:0 0 0 2px rgba(17,20,14,.85),0 0 0 3px rgba(168,122,74,.35)}
-  #pad-finger{width:21px;height:21px;margin:-10.5px 0 0 -10.5px;border:1px solid var(--muted);border-radius:50%;opacity:.75}
-
-  /* ---- 画面（タイトル / ステージ選択 / リザルト） ---- */
-  #screens{position:fixed;inset:0;z-index:5;display:none;background:rgba(17,20,14,.95);overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y}
+  /* 画面（タイトル・リザルト）。ゲームの上に重ねる。 */
+  #screens{position:fixed;inset:0;z-index:5;display:none;background:rgba(17,20,14,.94)}
   #screens.show{display:block}
-  .screen{display:none;min-height:100dvh;padding:24px 18px 32px;flex-direction:column;gap:16px;align-items:center;max-width:560px;margin:0 auto}
+  .screen{
+    display:none;height:100%;padding:24px 20px;flex-direction:column;
+    gap:18px;align-items:center;justify-content:center;text-align:center;
+  }
   .screen.show{display:flex}
-  .sc-title{font-size:clamp(19px,6vmin,30px);font-weight:700;letter-spacing:.05em;text-align:center;line-height:1.35}
-  .sc-sub{font-size:12px;color:var(--muted);text-align:center;line-height:1.7}
+  h1{font-size:clamp(24px,8vmin,38px);letter-spacing:.04em;line-height:1.3}
+  .sub{font-size:13px;color:var(--muted);line-height:1.9}
+  .big{font-size:clamp(30px,11vmin,52px);color:#e6c06a;font-family:ui-monospace,monospace}
   button{
-    font-family:var(--font);font-weight:700;letter-spacing:.05em;border:none;cursor:pointer;
-    color:#11140e;background:var(--accent);font-size:15px;padding:.7em 2em;
+    font-family:var(--font);font-weight:700;letter-spacing:.06em;border:none;cursor:pointer;
+    color:#11140e;background:var(--accent);font-size:16px;padding:.8em 2.4em;
   }
+  button.ghost{background:none;color:var(--muted);border:1px solid var(--line);font-size:13px;padding:.6em 1.6em}
   button:hover{filter:brightness(1.1)}
-  button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
-  button.ghost{background:none;color:var(--muted);border:1px solid var(--line);font-size:13px;padding:.55em 1.4em}
-  .btn-row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
-  /* 動画を見て復活するボタン。押すのはプレイヤーの選択なので、勝手に出ない。
-     display を指定する要素には hidden が効かない（既定の display:none を上書きしてしまう）。
-     広告が読めていないのにボタンだけ出て、押しても何も起きない状態になっていた。 */
   [hidden]{display:none !important}
-  #btn-continue{background:var(--graze);color:#11140e;display:flex;align-items:center;gap:.5em}
-  #btn-continue small{font-size:11px;font-weight:400;opacity:.75}
-  .mode-btn{width:100%;max-width:300px;text-align:left;display:flex;flex-direction:column;gap:2px;padding:.9em 1.2em}
-  .mode-btn b{font-size:16px}
-  .mode-btn span{font-size:11px;font-weight:400;opacity:.8}
 
-  .rank{width:100%;max-width:320px;border:1px solid var(--line);background:var(--tile)}
-  .rank h3{margin:0;font-size:11px;color:var(--dim);letter-spacing:.1em;padding:7px 10px;border-bottom:1px solid var(--line);font-weight:700}
-  .rank ol{margin:0;padding:4px 0;list-style:none}
-  .rank li{display:flex;gap:10px;align-items:baseline;padding:3px 10px;font-size:12px}
-  .rank li .n{font-family:var(--num);color:var(--dim);width:1.6em}
-  .rank li .s{font-family:var(--num);font-variant-numeric:tabular-nums;color:var(--graze);margin-left:auto}
-  .rank li .d{font-family:var(--num);color:var(--muted);font-size:11px}
-  .rank li.me{background:rgba(216,180,94,.12)}
-  .rank .empty{padding:10px;font-size:11px;color:var(--dim);text-align:center}
-
-  /* ---- ステージ選択 ---- */
-  .areas{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;width:100%;max-width:360px}
-  .area-btn{
-    background:var(--tile);border:1px solid var(--line);color:var(--muted);
-    font-family:var(--font);font-size:11px;font-weight:700;padding:7px 2px;cursor:pointer;line-height:1.3;
+  .how{
+    display:flex;gap:14px;justify-content:center;font-size:12px;
+    color:var(--muted);line-height:1.7;max-width:340px;
   }
-  .area-btn .num{display:block;font-family:var(--num);font-size:13px;color:var(--ink)}
-  .area-btn.on{border-color:var(--accent);color:var(--accent)}
-  .area-btn.locked{opacity:.35;cursor:not-allowed}
-  .stages{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;width:100%;max-width:360px}
-  .stage-btn{
-    background:var(--tile);border:1px solid var(--line);color:var(--ink);
-    font-family:var(--num);font-size:15px;font-weight:700;padding:9px 2px 6px;cursor:pointer;
-    display:flex;flex-direction:column;align-items:center;gap:3px;
-  }
-  .stage-btn .stars{font-size:9px;letter-spacing:1px;color:var(--graze);height:11px}
-  .stage-btn .stars .off{color:var(--dim)}
-  .stage-btn.locked{opacity:.3;cursor:not-allowed}
-  .stage-btn.cleared{border-color:var(--accent)}
-  .area-title{font-size:15px;font-weight:700;letter-spacing:.06em}
-  .area-meta{font-size:11px;color:var(--muted);font-family:var(--num)}
-
-  .big-stars{font-size:30px;letter-spacing:6px;color:var(--graze)}
-  .big-stars .off{color:var(--dim)}
-  .result-lines{font-size:13px;color:var(--muted);text-align:center;line-height:1.9;font-family:var(--num)}
-  .result-lines b{color:var(--ink)}
-
-  .settings-row{display:flex;gap:16px;justify-content:center;font-size:12px;color:var(--muted);flex-wrap:wrap}
-  .settings-row label{display:flex;align-items:center;gap:6px;cursor:pointer}
-  .settings-row input{accent-color:var(--accent);width:15px;height:15px}
-  .settings-row .set-label{color:var(--dim);align-self:center}
-
-  #rotate{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:var(--bg);text-align:center;font-size:15px;padding:24px;z-index:20}
-  #rotate.show{display:flex}
-  /* レベルアップや入手を、ゲーム画面の上に一瞬だけ出す。 */
-  #banner{
-    position:absolute;left:0;right:0;top:13%;text-align:center;pointer-events:none;z-index:1;
-    font-size:clamp(12px,3.8vmin,19px);font-weight:700;letter-spacing:.05em;color:#f2e3c8;
-    text-shadow:0 2px 0 rgba(17,20,14,.95),0 0 10px rgba(17,20,14,.95);
-    opacity:0;transition:opacity .18s ease;
-  }
-  #banner.show{opacity:1}
-  /* 囲まれたときの脱出口。せんべいを持っているあいだだけ、下段に出す。
-     ゲーム画面にはかぶせない——いちばん焦っているときに自分が隠れるのは最悪なので。 */
-  #scatter{
-    flex:none;width:100%;background:var(--graze);color:#11140e;
-    font-size:13px;padding:.5em 1em;letter-spacing:.08em;
-  }
-  #swarm-tile .value{color:var(--dirt)}
-  #swarm-tile.bad{border-color:var(--dirt);animation:pulse .5s ease-in-out infinite alternate}
-  @keyframes pulse{from{background:var(--tile)}to{background:#3a2018}}
-  @media (prefers-reduced-motion:reduce){ #swarm-tile.bad{animation:none} }
-  /* せんべいを持っているあいだは目立たせる（鹿が寄ってくる危険な状態） */
-  #senbei-tile.has{border-color:var(--graze)}
-  #senbei-tile.has .value{color:var(--graze)}
-
-  /* ゲーム画面には極力かぶせない。抜ける手段だけ小さく置く。 */
-  #quit{
-    position:absolute;right:3px;top:3px;z-index:2;background:rgba(17,20,14,.45);
-    color:rgba(227,232,218,.6);font-size:13px;line-height:1;padding:0;border:none;
-    width:22px;height:22px;font-weight:400;
-  }
-  #quit:hover{background:rgba(17,20,14,.8);color:var(--ink);filter:none}
+  .how div{flex:1;border:1px solid var(--line);padding:10px 8px}
+  .how b{display:block;color:var(--ink);font-size:13px;margin-bottom:4px}
+  #settings{display:flex;gap:16px;font-size:12px;color:var(--muted)}
+  #settings label{display:flex;align-items:center;gap:6px;cursor:pointer}
+  #settings input{accent-color:var(--accent);width:15px;height:15px}
 </style>
 </head>
 <body>
-  <div id="app">
-    <div id="stage">
-      <canvas id="screen" width="224" height="176"></canvas>
-      <div id="banner"></div>
-      <button id="quit" type="button" aria-label="やめる">×</button>
-    </div>
+  <div id="ad"></div>
 
-    <div id="panel">
-      <div id="pad">
-        <span class="pad-edge top">おく</span>
-        <span class="pad-edge bottom">てまえ</span>
-        <div id="pad-hint">なぞって うごく／はなすと ジャンプ</div>
-        <div class="marker" id="pad-finger"></div>
-        <div class="marker" id="pad-body"></div>
-      </div>
-      <button id="jump" type="button" hidden><span>ジャンプ</span><i id="jump-fuel"></i></button>
-    </div>
+  <div id="stage">
+    <canvas id="screen" width="160" height="288"></canvas>
+    <div id="hint">おしてる あいだ 下をみる</div>
   </div>
 
-  <div id="screens" class="show">
-    <!-- タイトル -->
-    <section class="screen show" id="sc-title">
-      <div class="sc-title">下ばっか見てると</div>
-      <div class="sc-sub">
-        鹿のフンをよけて参道をあるく。<br>
-        フンの<b>すぐそば</b>を通ると ばいりつが上がる。
+  <div id="screens">
+    <section class="screen" id="sc-title">
+      <h1>下ばっか見てると</h1>
+      <div class="how">
+        <div><b>おす</b>下をみる<br>フンをまたぐ<br><small>足はおそい</small></div>
+        <div><b>はなす</b>前をみる<br>鹿をよける<br><small>足がはやい</small></div>
       </div>
-      <div class="btn-row" style="flex-direction:column;align-items:center;width:100%">
-        <button class="mode-btn" id="btn-stage"><b>ステージ</b><span>100面。クリアして先へ進む</span></button>
-        <button class="mode-btn" id="btn-endless"><b>エンドレス</b><span>どこまでも。だんだん速く、濃くなる</span></button>
-      </div>
-      <div class="rank" id="rank-title">
-        <h3>ランキング（この端末）</h3>
-        <ol id="rank-list"></ol>
-      </div>
-      <div class="settings-row">
+      <p class="sub">どっちも いっぺんには 見られません</p>
+      <button id="btn-start">はじめる</button>
+      <div id="settings">
         <label><input id="sound" type="checkbox" checked>音</label>
       </div>
-      <div class="settings-row">
-        <span class="set-label">ジャンプ</span>
-        <label><input type="radio" name="jumpmode" value="release" checked>はなす</label>
-        <label><input type="radio" name="jumpmode" value="button">ボタン</label>
-        <label><input type="radio" name="jumpmode" value="both">りょうほう</label>
-      </div>
     </section>
 
-    <!-- ステージ選択 -->
-    <section class="screen" id="sc-stages">
-      <div class="sc-title" style="font-size:19px">ステージ</div>
-      <div class="areas" id="area-list"></div>
-      <div class="area-title" id="area-name">参道</div>
-      <div class="area-meta" id="area-meta">★0 / 30</div>
-      <div class="stages" id="stage-list"></div>
-      <div class="sc-sub" id="area-hint"></div>
-      <button class="ghost" id="btn-back-title">タイトルへ</button>
-    </section>
-
-    <!-- リザルト -->
-    <section class="screen" id="sc-result">
-      <div class="sc-title" id="result-title">くつが もうだめ</div>
-      <div class="big-stars" id="result-stars" hidden></div>
-      <div class="result-lines" id="result-lines"></div>
-      <div class="rank" id="rank-result" hidden>
-        <h3>ランキング（この端末）</h3>
-        <ol id="rank-list2"></ol>
-      </div>
-      <div class="btn-row">
-        <button id="btn-continue" hidden>見て つづける <small>動画</small></button>
-      </div>
-      <div class="btn-row">
-        <button id="btn-next" hidden>つぎへ</button>
-        <button id="btn-retry">もういちど</button>
-        <button class="ghost" id="btn-back">もどる</button>
-      </div>
+    <section class="screen" id="sc-over">
+      <p class="sub" id="over-why">くつが もうだめ</p>
+      <div class="big" id="over-score">0</div>
+      <p class="sub" id="over-best">さいこう 0</p>
+      <button id="btn-retry">もういちど</button>
+      <button class="ghost" id="btn-back">もどる</button>
     </section>
   </div>
-
-  <div id="rotate">端末を縦にしてください</div>
 
   <script type="module" src="/src/main.ts"></script>
 </body>

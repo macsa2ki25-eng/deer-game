@@ -1,237 +1,122 @@
-import * as C from "./config";
-import type { Span } from "./route";
+/** 走行1回ぶんの状態。すべてここに集めてある。 */
 
-export type DeerKind = "walk" | "homing" | "stag" | "side" | "pooper" | "sleeper" | "scene";
-export type Edge = "top" | "left" | "right";
-export type Mode = "endless" | "stage";
-export type Phase = "menu" | "playing" | "over" | "clear";
+export type Phase = "menu" | "playing" | "over";
 
-export interface Tourist {
-  x: number;
-  y: number;
-  /** せんべいを持っていて、鹿に囲まれている観光客か。 */
-  feeding: boolean;
-}
-
-export interface Deer {
-  x: number;
-  y: number;
-  kind: DeerKind;
-  /** 縦の相対速度[px/s]。横入り・寝ている鹿・群れは0。 */
-  sp: number;
-  /** 横速度[px/s]。 */
-  vx: number;
-  /** 立ち止まってフンをしている残り時間[s]。 */
-  squat: number;
-  dropIn: number;
-  dropsLeft: number;
-  /** せんべいに気づいてこちらに群がっているか。 */
-  swarm: boolean;
-  /** 群がっているとき、まわりを回る角度。 */
-  orbit: number;
-  /** 牡鹿がための終わりに定めた狙いの x。 */
-  lockX: number;
-  /** 餌やり場の主。いるならその周りを回る。 */
-  host: Tourist | null;
-}
-
+/** 足元に落ちているもの。 */
 export interface Poop {
   x: number;
+  /**
+   * 足元の帯（真上から見た絵）の中での縦位置 0〜1。
+   * **当たりには一切効かない。**効かせると位置合わせが復活して、
+   * このゲームがやめたはずのものが戻ってきてしまう。見た目だけのばらつき。
+   */
   y: number;
   big: boolean;
-  variant: number;
-  grazed: boolean;
+  /** 跨いだ／踏んだの判定を1回だけにする。 */
+  done: boolean;
 }
 
-/** 当たり判定の無い小石。回廊の輪郭を隠すためだけに存在する。 */
-export interface Pebble {
+/** 前から来る鹿。 */
+export interface Deer {
   x: number;
-  y: number;
-  variant: number;
+  frame: number;
+  done: boolean;
 }
 
-/** 鹿せんべい売り場。通ると10枚もらえる。 */
-export interface Stall {
+/** 拾えるもの。 */
+export interface Senbei {
   x: number;
-  y: number;
   taken: boolean;
 }
 
-/** 木。通れない。 */
-export interface Tree {
+/** 前方の帯を流れる飾り。当たらない。 */
+export interface Scenery {
   x: number;
-  y: number;
-}
-
-/** 落ちている新しいくつ。拾うと汚れが1減る。 */
-export interface Shoe {
-  x: number;
-  y: number;
-  taken: boolean;
-}
-
-/** 撒かれたせんべい。鹿がここへ殺到する。 */
-export interface Bait {
-  x: number;
-  y: number;
-  life: number;
-}
-
-export interface Warn {
-  edge: Edge;
-  kind: DeerKind;
-  t: number;
-  x: number;
-  y: number;
-  /** 群れで出るときの頭数。1なら単独。 */
-  herd: number;
+  kind: "tree" | "treeFar" | "lantern";
 }
 
 export interface State {
   phase: Phase;
-  mode: Mode;
-  stage: number;
 
+  /** 走った時間[s]。難易度はこれで決まる。 */
+  t: number;
+  /** 走った距離[px]。スコアの素。 */
   dist: number;
-  progress: number;
-  goal: number;
-
   score: number;
   dirt: number;
-  grazeCount: number;
-  poopHits: number;
-  deerHits: number;
-  grazeGauge: number;
-  mult: number;
 
-  /** 手持ちの鹿せんべい。 */
-  senbei: number;
-  /** 渡した枚数。 */
-  fed: number;
-  /** いま群がっている頭数。多いほど動けない。 */
-  swarmCount: number;
-  /** 連続で渡したときの倍率と、その残り時間。 */
-  feedChain: number;
-  feedChainT: number;
-  feedCooldown: number;
-  /** 群れに捕まっているか。せんべいが尽きるまで解けない。 */
-  encircled: boolean;
-  /** 次に1枚持っていかれるまで[s]。 */
-  drainT: number;
-  /** 解放直後の猶予[s]。 */
-  grace: number;
+  /**
+   * 下を見ているか。**指が押されているあいだ true。**
+   * 遊びの全部がこの1ビットに集約されている。
+   */
+  down: boolean;
+  /** 仕切りの位置（0〜1）。down に向かって滑らかに動く。 */
+  split: number;
+  /** 視線を切り替えた時刻。すれすれボーナスの判定に使う。 */
+  lastLook: number;
 
-  level: number;
+  /** 転んでいる残り時間[s]。0 なら走っている。 */
+  trip: number;
+  /** 跨いだ足を出している残り時間[s]。 */
+  stepping: number;
+  /** 走りのコマ送り。 */
+  walkAcc: number;
+
+  poops: Poop[];
+  deer: Deer[];
+  senbeis: Senbei[];
+  scenery: Scenery[];
+
+  poopTimer: number;
+  deerTimer: number;
+  senbeiTimer: number;
+  sceneryTimer: number;
+
+  /** 画面に一瞬出す一言。 */
   banner: string;
   bannerT: number;
 
-  px: number;
-  py: number;
-
-  inv: number;
-  stun: number;
-  /** 跳んでいる残り時間[s]。0より大きいあいだ、フンだけをすり抜ける。 */
-  air: number;
-  /** ジャンプの燃料 0〜1。使うと減り、時間で戻る。 */
-  jumpFuel: number;
-  slip: number;
-  knockback: number;
-
-  rowAcc: number;
-  walkAcc: number;
-  scrollPx: number;
-
-  /**
-   * いま生成した行で「まだ辿り着ける」横の範囲。
-   * 1本とは限らない——分岐すれば2本以上、行き止まれば減る。
-   * 空にならないことだけが保証されている（level.ts の openRoute）。
-   */
-  route: Span[];
-  /**
-   * その到達範囲の中を実際にたどっている1本の位置。
-   * **予約された道ではない**——置いたあとに残った隙間を選んだ結果。
-   * これが必ず続くことだけが、このゲームの公平さの保証そのもの。
-   */
-  thread: number;
-  /** 直前の行で、通すために物を取り除いたか。検証用。 */
-  repaired: boolean;
-
-  deerTimer: number;
-  touristTimer: number;
-  stallTimer: number;
-  shoeTimer: number;
-  sceneTimer: number;
-  restShown: number;
-
-  poops: Poop[];
-  pebbles: Pebble[];
-  stalls: Stall[];
-  trees: Tree[];
-  baits: Bait[];
-  shoes: Shoe[];
-  deer: Deer[];
-  tourists: Tourist[];
-  warns: Warn[];
+  /** 集計（検証用）。 */
+  /** わざと重ねて出した回数。**上手い人が食うのはここだけ**であるべき。 */
+  clashSpawns: number;
+  poopHits: number;
+  deerHits: number;
+  dodges: number;
+  nices: number;
+  best: number;
 }
 
 export function createState(): State {
-  const s = { phase: "menu", mode: "endless", stage: 1 } as State;
+  const s = { phase: "menu" } as State;
   resetRun(s);
+  s.best = 0;
   return s;
 }
 
-/** 1プレイぶんの初期化。設定は残す。 */
 export function resetRun(s: State): void {
-  s.progress = 0;
-  s.dist = s.mode === "stage" ? C.stageDifficulty(s.stage) : 0;
-  s.goal = s.mode === "stage" ? C.stageLength(s.stage) : 0;
+  s.t = 0;
+  s.dist = 0;
   s.score = 0;
   s.dirt = 0;
-  s.grazeCount = 0;
-  s.poopHits = 0;
-  s.deerHits = 0;
-  s.grazeGauge = 0;
-  s.mult = 1;
-  s.senbei = 0;
-  s.fed = 0;
-  s.swarmCount = 0;
-  s.feedChain = 1;
-  s.feedChainT = 0;
-  s.feedCooldown = 0;
-  s.encircled = false;
-  s.drainT = 0;
-  s.grace = 0;
-  s.level = C.levelOf(s.dist);
+  s.down = false;
+  s.split = 0.62;
+  s.lastLook = -9;
+  s.trip = 0;
+  s.stepping = 0;
+  s.walkAcc = 0;
+  s.poops = [];
+  s.deer = [];
+  s.senbeis = [];
+  s.scenery = [];
+  s.poopTimer = 1.4;
+  s.deerTimer = 2.6;
+  s.senbeiTimer = 6;
+  s.sceneryTimer = 0.5;
   s.banner = "";
   s.bannerT = 0;
-  s.px = (C.PATH.x0 + C.PATH.x1) / 2 - C.PLAYER.w / 2;
-  s.py = C.PLAY_Y.bottom - 24;
-  s.inv = 0;
-  s.stun = 0;
-  s.air = 0;
-  s.jumpFuel = 1;
-  s.slip = 0;
-  s.knockback = 0;
-  s.rowAcc = 0;
-  s.walkAcc = 0;
-  s.scrollPx = 0;
-  // 最初はどこからでも歩き出せる
-  s.route = [{ a: C.PATH.x0, b: C.PATH.x1 }];
-  s.thread = (C.PATH.x0 + C.PATH.x1) / 2;
-  s.repaired = false;
-  s.deerTimer = 1.2;
-  s.touristTimer = 3;
-  s.stallTimer = C.STALL_INTERVAL_MIN;
-  s.shoeTimer = C.SHOE_INTERVAL_MIN;
-  s.sceneTimer = C.FEEDING_SCENE_INTERVAL_MIN;
-  s.restShown = 0;
-  s.poops = [];
-  s.pebbles = [];
-  s.stalls = [];
-  s.trees = [];
-  s.baits = [];
-  s.shoes = [];
-  s.deer = [];
-  s.tourists = [];
-  s.warns = [];
+  s.clashSpawns = 0;
+  s.poopHits = 0;
+  s.deerHits = 0;
+  s.dodges = 0;
+  s.nices = 0;
 }
