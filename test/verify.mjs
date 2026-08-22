@@ -60,8 +60,8 @@ const BOT = `
 window.__bot = (spec) => new Promise((done) => {
   const M = window.__mtd, C = M.config, s = M.state;
   const t0 = performance.now();
-  const seen = { toggles: 0, maxDeer: 0, maxPoop: 0, clashes: 0, minLead: 99 };
-  let wasDown = null;
+  const seen = { toggles: 0, maxDeer: 0, maxPoop: 0, clashes: 0, unfair: 0 };
+  let wasDown = null, hits = 0, lastForced = -9;
 
   const tick = () => {
     const t = (performance.now() - t0) / 1000;
@@ -70,6 +70,7 @@ window.__bot = (spec) => new Promise((done) => {
         phase: s.phase, t: s.t, dist: s.dist, score: s.score, dirt: s.dirt,
         poopHits: s.poopHits, deerHits: s.deerHits, dodges: s.dodges, nices: s.nices,
         clashSpawns: s.clashSpawns, jumps: s.jumps, jumpMiss: s.jumpMiss,
+        toggleCount: M.input.toggles,
         ...seen,
       });
       return;
@@ -91,16 +92,38 @@ window.__bot = (spec) => new Promise((done) => {
     seen.maxDeer = Math.max(seen.maxDeer, s.deer.length);
     if (nextPoop && nextDeer && Math.abs(nextPoop.x - nextDeer.x) < 14) seen.clashes++;
 
+    /**
+     * **それぞれが足元に届くまでの時間[秒]で比べる。**
+     *
+     * 前は鹿を「距離 ÷ 1.35」で近く見せていたが、鹿は視差で
+     * 1/AHEAD_PARALLAX = 3.3倍ゆっくり近づく。距離で比べるかぎり、
+     * ボットは鹿に早く反応しすぎて小さいフンを踏んでいた。
+     * **いちばん早く着くものに合わせる**のが、そのまま最善手になる。
+     */
+    const vv = C.speedAhead(s.t);
+    const tDown = nextPoop ? (nextPoop.x + C.POOP_SIDE.w / 2 - C.KID_X) / vv : Infinity;
+    const tBig = nextBig ? (nextBig.x + C.POOP_SIDE.w / 2 - C.KID_X) / vv : Infinity;
+    const tDeer = nextDeer
+      ? (nextDeer.x + C.DEER_SIDE.w / 2 - C.KID_X) / (vv * C.AHEAD_PARALLAX)
+      : Infinity;
+    const tUp = Math.min(tBig, tDeer);
+
+    /**
+     * **避けようのない場面**＝上を要求するものと下を要求するものが、
+     * 反応時間より短い間隔で続けて着くとき。そこでしか当たらないはず。
+     * 当たった瞬間の直前にその場面が無ければ、それは理不尽な被弾。
+     */
+    if (Math.abs(tDown - tUp) < C.T_MIN) lastForced = s.t;
+    const now = s.poopHits + s.deerHits;
+    if (now > hits) {
+      hits = now;
+      if (s.t - lastForced > 0.6) seen.unfair++;
+    }
+
     let down;
     if (spec.look === "ahead") down = false;
     else if (spec.look === "down") down = true;
-    else {
-      // 近いほうに合わせる。届くまでの距離で比べる。
-      const dp = nextPoop ? nextPoop.x + C.POOP_SIDE.w / 2 - C.KID_X : Infinity;
-      const db = nextBig ? nextBig.x + C.POOP_SIDE.w / 2 - C.KID_X : Infinity;
-      const dd = nextDeer ? (nextDeer.x + C.DEER_SIDE.w / 2 - C.KID_X) / 1.35 : Infinity;
-      down = dp < Math.min(db, dd);
-    }
+    else down = tDown < tUp;
 
     if (wasDown !== null && down !== wasDown) seen.toggles++;
     wasDown = down;
@@ -316,10 +339,16 @@ const perfect = await drive(page, 30, "perfect");
  * 「たまたま同時に届く」が年中起きていたため。意図した重なり以外は、
  * かならず切り替える余地が残っていなければならない（SEPARATION）。
  */
+/**
+ * 被弾の総数と「わざと重ねた回数」を比べていたが、どちらもばらつくので
+ * 判定が運任せだった。**当たった一発ずつを見て、その直前に
+ * 「上と下が反応時間より短い間隔で続けて着く」場面があったか**を数える。
+ * 無ければ理不尽な被弾。0でなければならない。
+ */
 const perfectHits = perfect.poopHits + perfect.deerHits;
-check("正しい側を見ていれば、わざと重ねた場面でしか当たらない",
-  perfectHits <= perfect.clashSpawns,
-  `被弾${perfectHits} / わざと重ねた回数${perfect.clashSpawns} / ${perfect.dodges}回よけた`);
+check("正しい側を見ていれば、避けようのない場面でしか当たらない",
+  perfect.unfair === 0,
+  `理不尽な被弾${perfect.unfair} / 被弾${perfectHits} / わざと重ねた回数${perfect.clashSpawns} / ${perfect.dodges}回よけた`);
 check("きわどい二連がちゃんと起きる", perfect.clashSpawns > 0,
   `${perfect.clashSpawns} 回`);
 

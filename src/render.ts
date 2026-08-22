@@ -278,20 +278,27 @@ function bandLabel(
  * 説明文を増やすのではなく、**そのとき押すべきかどうかを、その場に出す**。
  */
 function introPrompt(ctx: CanvasRenderingContext2D, s: State, split: number): void {
-  // 下を向くべきもの（小さいフン）と、顔を上げるべきもの（鹿・大きいフン）。
-  // **大きいフンは、とぶために顔を上げる側**。ここを間違えると教え方が逆になる。
-  let wantsDown = Infinity;
-  let wantsUp = Infinity;
+  /**
+   * 下を向くべきもの（小さいフン）と、顔を上げるべきもの（鹿・大きいフン）を、
+   * **足元に着くまでの時間**で比べる。距離で比べると、視差でゆっくり
+   * 近づいてくる鹿を近いものと見誤って、教え方が逆になる。
+   * **大きいフンは、とぶために顔を上げる側。**
+   */
+  const v = C.speedAhead(s.t);
+  let tDown = Infinity;
+  let tUp = Infinity;
   for (const p of s.poops) {
     if (p.done) continue;
-    if (p.big) wantsUp = Math.min(wantsUp, p.x - C.KID_X);
-    else wantsDown = Math.min(wantsDown, p.x - C.KID_X);
+    const t = (p.x - C.KID_X) / v;
+    if (p.big) tUp = Math.min(tUp, t);
+    else tDown = Math.min(tDown, t);
   }
-  for (const d of s.deer) if (!d.done) wantsUp = Math.min(wantsUp, (d.x - C.KID_X) / 1.35);
+  for (const d of s.deer) {
+    if (!d.done) tUp = Math.min(tUp, (d.x - C.KID_X) / (v * C.AHEAD_PARALLAX));
+  }
 
-  const near = Math.min(wantsDown, wantsUp);
-  if (near > 95) return;
-  const wantDown = wantsDown <= wantsUp;
+  if (Math.min(tDown, tUp) > 1.2) return;   // まだ先。出すには早い
+  const wantDown = tDown <= tUp;
 
   const msg = wantDown ? "▼ おす" : "▲ はなす";
   const ok = wantDown === s.down;
