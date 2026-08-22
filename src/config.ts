@@ -59,7 +59,7 @@ export const KID_X = 30;
  * 追加のルールを一つも足さずに、risk と reward が生まれる。
  */
 export function speedAhead(t: number): number {
-  return 74 + 46 * (1 - Math.exp(-t / 42));
+  return 96 + 58 * (1 - Math.exp(-t / 40));
 }
 export const SLOW_FACTOR = 0.62;
 
@@ -87,6 +87,18 @@ export const TRIP_DEER = 0.95;
 export const T_MIN = 0.45;
 
 /**
+ * **最初のうちは、教える。**
+ *
+ * 「何をやっているのかよくわからないまま終わった」——それは説明文の問題ではなく、
+ * **初回に教える時間が無かった**から。この秒数のあいだは
+ *   ・フンと鹿を交互に、ゆっくり、1つずつ出す
+ *   ・重ねない
+ *   ・踏んでも汚れない（転ぶ絵は出す。何が起きたかは見せる）
+ * つまり**必ず1回ずつ、安全に体験させてから**本番に入る。
+ */
+export const INTRO_TIME = 11;
+
+/**
  * 右端に出たものが足元に届くまでの時間[s]。
  * 速さが上がっても (VIEW.w - KID_X) / v なので、いちばん速い 120px/s でも
  * (128-26)/120 = 0.85秒。**T_MIN を割ることは構造的に起きない。**
@@ -96,12 +108,23 @@ export function leadTime(t: number): number {
   return (VIEW.w - KID_X) / speedAhead(t);
 }
 
-/** 次のフン／鹿までの間隔[s]。奥へ行くほど詰まる。 */
+/**
+ * 次のフン／鹿までの間隔[s]。奥へ行くほど詰まる。
+ *
+ * **下限は SEPARATION から逆算してある。**
+ * ふたつを 0.55秒 は離すと決めた以上、届く回数の合計は
+ * 1/0.55 = 1.82回/秒 を超えられない。超えると、片方が
+ * 「離せる場所が無い」まま延々と待たされ、**湧かなくなる**。
+ * 実際 0.62 + 0.95 のときは 2.67回/秒 を要求していて、
+ * 鹿がほとんど出ず、山場（重なり）が一度も起きなかった。
+ *
+ * 0.95 と 1.4 で合計 1.77回/秒。収まる。
+ */
 export function poopInterval(t: number): number {
-  return Math.max(0.62, 1.85 * Math.exp(-t / 55));
+  return Math.max(0.95, 1.85 * Math.exp(-t / 55));
 }
 export function deerInterval(t: number): number {
-  return Math.max(0.95, 2.9 * Math.exp(-t / 60));
+  return Math.max(1.4, 2.9 * Math.exp(-t / 60));
 }
 
 /** 同じ側で続けて出すときの最小の間隔[s]。これ以上詰めると避けようがない。 */
@@ -138,8 +161,21 @@ export const SEPARATION = 0.55;
  * 「下ばっか見てると（鹿にぶつかる）」がそのまま最適手になっている。
  */
 export function clashChance(t: number): number {
-  return Math.min(0.3, 0.05 + t / 260);
+  if (t < INTRO_TIME) return 0;
+  return Math.min(0.26, 0.03 + (t - INTRO_TIME) / 300);
 }
+
+/**
+ * 重ねて出すときの、届く時刻の差[s]。**鹿が先、フンが後。**
+ *
+ * ここが 0.20〜0.33秒 しかなく、「どうにもならない」場面になっていた。
+ * 反応時間の下限が 0.45秒 で、しかも**切り替えて戻すので2回**要る。
+ * 間に合うはずがなかった。
+ *
+ * 0.75秒 なら、見てから前→下と動かせる。際どいが、間に合う。
+ * 鹿を先に出すのは、**重い方（鹿）を先に片づけさせる**ため。
+ */
+export const CLASH_GAP = 0.75;
 
 // ---- 当たり ----
 
@@ -172,5 +208,7 @@ export const SENBEI_INTERVAL_MAX = 14;
 export const KID_HEAD = { w: 16, h: 22 } as const;
 export const KID_LEGS = { w: 14, h: 18 } as const;
 export const DEER_SIDE = { w: 26, h: 22 } as const;
-export const POOP_SIDE = { w: 9, h: 6 } as const;
+// 足元の帯は寄りの絵なので、フンも大きく描く。
+export const POOP_SIDE = { w: 15, h: 10 } as const;
+export const LEGS_BIG = { w: 22, h: 40 } as const;
 export const SENBEI = { w: 9, h: 9 } as const;

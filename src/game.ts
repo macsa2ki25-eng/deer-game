@@ -28,10 +28,18 @@ function banner(s: State, text: string, secs: number): void {
   s.bannerT = secs;
 }
 
-/** 汚れが増える。3つでおしまい。 */
+/**
+ * 汚れが増える。3つでおしまい。
+ * **教えているあいだ（intro）は汚れない。**転ぶ絵は出す——
+ * 何が起きたのかを見せないと、教えたことにならないので。
+ */
 function hurt(s: State, why: string, trip: number): void {
-  s.dirt++;
   s.trip = trip;
+  if (s.intro > 0) {
+    banner(s, why + "（いまは セーフ）", 1.1);
+    return;
+  }
+  s.dirt++;
   banner(s, why, 0.9);
   if (s.dirt >= C.DIRT_MAX) {
     s.dirt = C.DIRT_MAX;
@@ -54,6 +62,7 @@ export function step(s: State, dt: number): void {
   if (s.phase !== "playing") return;
 
   s.t += dt;
+  s.intro = Math.max(0, s.intro - dt);
   s.bannerT -= dt;
   s.stepping = Math.max(0, s.stepping - dt);
 
@@ -165,36 +174,62 @@ function tooClose(s: State, isDeer: boolean, v: number): boolean {
 function spawn(s: State, dt: number): void {
   const v = C.speedAhead(s.t);
 
+  // 教えているあいだは、間隔を広げて1つずつにする。
+  const introSlack = s.intro > 0 ? 1.9 : 1;
+
   s.poopTimer -= dt;
   s.deerTimer -= dt;
   s.senbeiTimer -= dt;
   s.sceneryTimer -= dt;
 
-  // **反対側と近すぎるときは出さずに待つ。**
-  // ここが無いと、たまたま同時に届く場面が年中生まれてしまう。
-  if (s.poopTimer <= 0 && tooClose(s, false, v)) s.poopTimer = 0.1;
-  if (s.deerTimer <= 0 && tooClose(s, true, v)) s.deerTimer = 0.1;
+  /**
+   * **反対側と近すぎるときは出さずに待つ。**
+   * これが無いと、たまたま同時に届く場面が年中生まれてしまう。
+   *
+   * ただし待ちっぱなしにはしない。詰まりすぎた設定を入れたときに
+   * 片方が永久に湧かなくなる（実際そうなって、山場が一度も起きなかった）。
+   * 間隔の下限は SEPARATION から逆算してあるので本来起きないが、
+   * **数字をいじったときに黙って壊れないように**、逃げ道を残しておく。
+   */
+  if (s.poopTimer <= 0) {
+    if (tooClose(s, false, v) && s.poopBlocked < 8) { s.poopTimer = 0.1; s.poopBlocked++; }
+    else s.poopBlocked = 0;
+  }
+  if (s.deerTimer <= 0) {
+    if (tooClose(s, true, v) && s.deerBlocked < 8) { s.deerTimer = 0.1; s.deerBlocked++; }
+    else s.deerBlocked = 0;
+  }
 
   if (s.poopTimer <= 0) {
-    s.poops.push({
-      x: C.VIEW.w + 4,
-      y: Math.random(),
-      big: Math.random() < 0.25,
-      done: false,
-    });
-    s.poopTimer = Math.max(C.MIN_GAP, C.poopInterval(s.t) * (0.75 + Math.random() * 0.5));
+    s.poops.push({ x: C.VIEW.w + 4, big: Math.random() < 0.25, done: false });
+    s.poopTimer = Math.max(C.MIN_GAP, C.poopInterval(s.t) * (0.75 + Math.random() * 0.5))
+      * introSlack;
 
-    // ときどき、鹿と重ねてくる。**両方は見られない場面をわざと作る。**
-    if (Math.random() < C.clashChance(s.t)) {
-      s.deer.push({ x: C.VIEW.w + 4 + Math.random() * 10, frame: 0, done: false });
-      s.clashSpawns++;
-      s.deerTimer = Math.max(s.deerTimer, C.deerInterval(s.t) * 0.8);
-    }
+
   }
 
   if (s.deerTimer <= 0) {
     s.deer.push({ x: C.VIEW.w + 6, frame: 0, done: false });
-    s.deerTimer = Math.max(C.MIN_GAP, C.deerInterval(s.t) * (0.75 + Math.random() * 0.5));
+    s.deerTimer = Math.max(C.MIN_GAP, C.deerInterval(s.t) * (0.75 + Math.random() * 0.5))
+      * introSlack;
+
+    /**
+     * ときどき、**鹿のすぐ後ろにフンを置く**。このゲームの山場。
+     *
+     * 前は「フンを出すとき、ついでに鹿も」という向きで書いていて、
+     * 鹿のほうが速く着くので差が 0.20〜0.33秒 しかなかった。
+     * 反応時間 0.45秒 に届かず、しかも切り替えて戻すので2回要る——
+     * 文字どおり「どうにもならない」場面になっていた。
+     *
+     * いまは鹿を先に出し、**フンが CLASH_GAP 後に着くよう時刻で逆算する**。
+     * 見てから前→下と動かせる。際どいが、間に合う。
+     */
+    if (Math.random() < C.clashChance(s.t)) {
+      const deerArrive = arrival(C.VIEW.w + 6, true, v);
+      const poopFlight = arrival(C.VIEW.w + 4, false, v);
+      s.poopTimer = Math.max(0.05, C.CLASH_GAP + deerArrive - poopFlight);
+      s.clashSpawns++;
+    }
   }
 
   if (s.senbeiTimer <= 0) {

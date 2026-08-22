@@ -140,14 +140,15 @@ function drawAhead(ctx: CanvasRenderingContext2D, s: State, top: number, h: numb
 }
 
 /**
- * 足元の帯。**真上から見た地面。**
+ * 足元の帯。**横から見た、足元のアップ。**
  *
- * 上帯（横から見た前方）と視点をわざと変えてある。目の使い方が違うからで、
- * 同じ横視点で2つ並べると、視線の切り替えではなくただの分割画面に見える。
- * 真上から見ると帯の高さいっぱいにフンを散らせるので、画面も埋まる。
+ * 上帯と同じ場面を「近く」で見ているだけ。
+ * 一度は真上から見た絵にしていたが、「足元を映しているとわかりにくい」と言われた。
+ * 理屈（目の使い方が違う）としては筋が通っていたが、伝わらないなら負け。
  *
- * **散らばりは見た目だけ。**当たりは「通り過ぎた瞬間に下を見ていたか」だけで
- * 決まる。ここに縦の当たり判定を入れると、位置合わせが復活してしまう。
+ * **フンは靴と同じ線を通る。**帯いっぱいに散らしていたのをやめた。
+ * 当たりに効かないから安全、というのは作り手の理屈で、
+ * 遊ぶ側からは「足と関係ない場所のフンを避けている」ようにしか見えない。
  */
 function drawGround(ctx: CanvasRenderingContext2D, s: State, top: number, h: number): void {
   if (h <= 0) return;
@@ -156,47 +157,90 @@ function drawGround(ctx: CanvasRenderingContext2D, s: State, top: number, h: num
   ctx.rect(0, top, C.VIEW.w, h);
   ctx.clip();
 
-  ctx.fillStyle = COL.ground;
-  ctx.fillRect(0, top, C.VIEW.w, h);
+  /**
+   * 地面の線を**帯の上のほうに置く**。ここを靴とフンが通る。
+   *
+   * 最初は帯の下端に置いたが、そうすると帯の3/4が空になった。
+   * **下を向いたとき、目に入るのはほとんど地面**なので、逆が正しい。
+   * 線から下はぜんぶ砂利（手前の地面）で埋まる。
+   */
+  const base = top + Math.round(h * 0.30);
 
-  // 砂利。**帯いっぱいに、流れる向きに敷く。**
-  // 密度を上げてあるのは、ここが「速い」をいちばん強く伝える場所だから。
-  // 位置は決まった式から出しているので、作り直しても同じ模様が出る。
+  ctx.fillStyle = COL.skyLow;
+  ctx.fillRect(0, top, C.VIEW.w, Math.max(0, base - top));
+
+  ctx.fillStyle = COL.ground;
+  ctx.fillRect(0, base, C.VIEW.w, top + h - base);
+  ctx.fillStyle = COL.groundDark;
+  ctx.fillRect(0, base, C.VIEW.w, 1);
+
+  // 砂利。寄りの絵なので粒を大きく。ここが「速い」をいちばん強く伝える。
   const period = 112;
   const off = Math.floor(s.dist) % period;
-  for (let i = 0; i < 460; i++) {
+  const gh = Math.max(1, top + h - base - 3);
+  for (let i = 0; i < 420; i++) {
     const gx = (i * 41) % (C.VIEW.w + period);
-    const gy = (i * 67) % Math.max(1, h);
+    const gy = (i * 29) % gh;
     const x = gx - off;
-    if (x < -1 || x > C.VIEW.w) continue;
+    if (x < -2 || x > C.VIEW.w) continue;
     const n = gravelAt(gx, gy);
-    ctx.fillStyle = n < 0.38 ? COL.groundDark : n > 0.9 ? COL.pebble : COL.groundLight;
-    ctx.fillRect(x, top + gy, 1, 1);
+    ctx.fillStyle = n < 0.4 ? COL.groundDark : n > 0.88 ? COL.pebble : COL.groundLight;
+    ctx.fillRect(x, base + 3 + gy, 2, 2);
   }
 
-  // 敷石の目地。真上から見た絵なので縦の線になる。等間隔＝速さがそのまま見える。
-  // **薄く、途切れさせる。**濃い線を通しで引くと板張りの床に見えてしまった。
-  ctx.fillStyle = COL.joint;
-  for (let x = -(Math.floor(s.dist) % 30); x < C.VIEW.w; x += 30) {
-    for (let y = top + 3; y < top + h - 3; y += 7) ctx.fillRect(x, y, 1, 4);
-  }
-
-  // フンは帯いっぱいに散らす。**散らばりは見た目だけ**（当たりには効かない）。
+  // **フンは地面の線の上。靴と同じ高さを通る。**
   for (const p of s.poops) {
     const spr = p.big ? SPR.poopBig : SPR.poop;
-    const py = top + 5 + p.y * Math.max(1, h - spr.height - 10);
-    ctx.drawImage(spr, Math.round(p.x), Math.round(py));
+    ctx.drawImage(spr, Math.round(p.x), base - spr.height + 2);
   }
 
-  // 靴。真上から。跨いだ瞬間だけ足が開く——「自分で避けた」感はこの1コマで出る。
-  const shoes = s.trip > 0
-    ? SPR.shoes[0]
+  // 足。跨いだ瞬間だけ前足が上がる——「自分で避けた」感はこの1コマで出る。
+  const legs = s.trip > 0
+    ? SPR.legs[0]
     : s.stepping > 0
-      ? SPR.shoesStep
-      : SPR.shoes[Math.floor(s.walkAcc / 9) % 2];
-  ctx.drawImage(shoes, C.KID_X - 3, Math.round(top + h / 2 - shoes.height / 2));
+      ? SPR.legsStep
+      : SPR.legs[Math.floor(s.walkAcc / 11) % 2];
+  ctx.drawImage(legs, C.KID_X - 8, base - legs.height + 4);
 
   ctx.restore();
+}
+
+/** 帯の名前。**初見で何を見ているか分からない**と言われたので、書いてある。 */
+function bandLabel(
+  ctx: CanvasRenderingContext2D, str: string, x: number, y: number, on: boolean,
+): void {
+  ctx.font = "7px monospace";
+  ctx.fillStyle = on ? "rgba(242,227,200,.85)" : "rgba(242,227,200,.35)";
+  ctx.fillText(str, x, y);
+}
+
+/**
+ * 教えているあいだの合図。
+ *
+ * 「何をやっているのかよくわからないまま終わった」への答え。
+ * 説明文を増やすのではなく、**そのとき押すべきかどうかを、その場に出す**。
+ */
+function introPrompt(ctx: CanvasRenderingContext2D, s: State, split: number): void {
+  let poop = Infinity;
+  let deer = Infinity;
+  for (const p of s.poops) if (!p.done) poop = Math.min(poop, p.x - C.KID_X);
+  for (const d of s.deer) if (!d.done) deer = Math.min(deer, (d.x - C.KID_X) / 1.35);
+
+  const near = Math.min(poop, deer);
+  if (near > 95) return;
+  const wantDown = poop <= deer;
+
+  const msg = wantDown ? "▼ おす" : "▲ はなす";
+  const ok = wantDown === s.down;
+  const y = wantDown ? split + 24 : C.HUD_H + 24;
+
+  ctx.font = "bold 11px monospace";
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(17,20,14,.7)";
+  ctx.fillRect(C.VIEW.w / 2 - 30, y - 10, 60, 14);
+  ctx.fillStyle = ok ? "#7fae4e" : "#e6c06a";
+  ctx.fillText(msg, C.VIEW.w / 2, y);
+  ctx.textAlign = "left";
 }
 
 export function render(ctx: CanvasRenderingContext2D, s: State): void {
@@ -216,7 +260,15 @@ export function render(ctx: CanvasRenderingContext2D, s: State): void {
   ctx.fillStyle = COL.ink;
   ctx.fillRect(0, split - 1, C.VIEW.w, 1);
 
+  // どっちの帯が何なのかを書いておく。初見で分かることのほうが、
+  // 画面がすっきりしていることより大事。
+  bandLabel(ctx, "まえ", 3, C.HUD_H + 9, !s.down);
+  bandLabel(ctx, "あしもと", 3, split + 9, s.down);
+
   drawHud(ctx, s);
+
+  // 教えているあいだは、**次に来るものと、いま何をすべきか**を出す。
+  if (s.intro > 0 && s.phase === "playing") introPrompt(ctx, s, split);
 
   if (s.bannerT > 0 && s.banner) {
     ctx.fillStyle = "rgba(17,20,14,.75)";

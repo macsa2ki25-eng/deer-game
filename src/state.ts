@@ -1,3 +1,5 @@
+import * as C from "./config";
+
 /** 走行1回ぶんの状態。すべてここに集めてある。 */
 
 export type Phase = "menu" | "playing" | "over";
@@ -6,11 +8,13 @@ export type Phase = "menu" | "playing" | "over";
 export interface Poop {
   x: number;
   /**
-   * 足元の帯（真上から見た絵）の中での縦位置 0〜1。
-   * **当たりには一切効かない。**効かせると位置合わせが復活して、
-   * このゲームがやめたはずのものが戻ってきてしまう。見た目だけのばらつき。
+   * **縦位置は持たない。**
+   *
+   * 一度は帯いっぱいに散らした。画面が埋まるし当たりには効かないから
+   * 安全だ、という作り手の理屈だったが、遊ぶ側から見ると
+   * **「足と関係ない場所にあるフンを避けている」**だけだった。
+   * フンは靴と同じ線を通る。それでこそ「跨ぐ」が成立する。
    */
-  y: number;
   big: boolean;
   /** 跨いだ／踏んだの判定を1回だけにする。 */
   done: boolean;
@@ -69,12 +73,18 @@ export interface State {
 
   poopTimer: number;
   deerTimer: number;
+  /** 反対側と近すぎて出せなかった回数。詰まりすぎたときの逃げ道に使う。 */
+  poopBlocked: number;
+  deerBlocked: number;
   senbeiTimer: number;
   sceneryTimer: number;
 
   /** 画面に一瞬出す一言。 */
   banner: string;
   bannerT: number;
+
+  /** 教えているあいだの残り時間[s]。0 になったら本番。 */
+  intro: number;
 
   /** 集計（検証用）。 */
   /** わざと重ねて出した回数。**上手い人が食うのはここだけ**であるべき。 */
@@ -108,8 +118,11 @@ export function resetRun(s: State): void {
   s.deer = [];
   s.senbeis = [];
   s.scenery = [];
-  s.poopTimer = 1.4;
-  s.deerTimer = 2.6;
+  s.intro = C.INTRO_TIME;
+  s.poopBlocked = 0;
+  s.deerBlocked = 0;
+  s.poopTimer = 1.6;
+  s.deerTimer = 4.4;
   s.senbeiTimer = 6;
   s.sceneryTimer = 0.5;
   s.banner = "";

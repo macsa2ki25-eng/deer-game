@@ -185,13 +185,46 @@ const lead = await page.evaluate(() => {
 check("出てから届くまで、いちばん速いときでも反応時間より長い", lead > 0.45 + 0.25,
   `${lead.toFixed(2)}秒（反応時間の下限 0.45秒）`);
 
-// 足元のばらつきは見た目だけ。当たりに効いていたら、位置合わせが復活している。
-const gameSrc = await readFile(resolve(DIST, "../src/game.ts"), "utf8");
-const noYInHit = !/\bp\.y\b/.test(gameSrc);
-check("当たり判定がフンの縦位置を見ていない", noYInHit);
+/**
+ * **フンは靴と同じ線を通る。縦位置を持たない。**
+ *
+ * 一度は帯いっぱいに散らした。当たりに効かないから安全、という理屈だったが、
+ * 遊んだ人には「足と関係ない場所のフンを避けている」としか見えなかった。
+ * 縦位置を持たせた時点で、また同じことをやる余地が生まれる。型で塞ぐ。
+ */
+const stateSrc = await readFile(resolve(DIST, "../src/state.ts"), "utf8");
+const poopDecl = stateSrc.slice(stateSrc.indexOf("interface Poop"),
+  stateSrc.indexOf("}", stateSrc.indexOf("interface Poop")));
+check("フンが縦位置を持っていない", !/^\s*y\s*:/m.test(poopDecl));
 
-await start();
-const perfect = await drive(page, 25, "perfect");
+/** 重なりは、見てから前→下と動かせる差でなければならない。 */
+const clash = await page.evaluate(() => {
+  const C = window.__mtd.config;
+  const out = [];
+  for (const t of [0, 20, 60, 200]) {
+    const v = C.speedAhead(t);
+    const deer = (C.VIEW.w + 6 + C.DEER_SIDE.w / 2 - C.KID_X) / (v * 1.35);
+    const poopFlight = (C.VIEW.w + 4 + C.POOP_SIDE.w / 2 - C.KID_X) / v;
+    const wait = Math.max(0.05, C.CLASH_GAP + deer - poopFlight);
+    out.push(wait + poopFlight - deer);
+  }
+  return Math.min(...out);
+});
+check("重なっても、見てから切り替える時間がある", clash > 0.45 + 0.2,
+  `いちばん詰まっても ${clash.toFixed(2)}秒（反応時間 0.45秒 ＋ 戻す余裕）`);
+
+// **教える時間（intro）を飛ばして、本番の濃さで見る。**
+// intro のあいだは重ねないので、そのまま測ると重なりが 0回 になる。
+const skipIntro = async (t) => {
+  await start();
+  await page.evaluate((tt) => {
+    window.__mtd.state.t = tt;
+    window.__mtd.state.intro = 0;
+  }, t);
+};
+
+await skipIntro(90);
+const perfect = await drive(page, 30, "perfect");
 /**
  * **上手い人が食うのは、game がわざと重ねた場面だけであるべき。**
  *
@@ -203,7 +236,7 @@ const perfectHits = perfect.poopHits + perfect.deerHits;
 check("正しい側を見ていれば、わざと重ねた場面でしか当たらない",
   perfectHits <= perfect.clashSpawns,
   `被弾${perfectHits} / わざと重ねた回数${perfect.clashSpawns} / ${perfect.dodges}回よけた`);
-check("避けようのない場面がちゃんと起きる", perfect.clashSpawns > 0,
+check("きわどい二連がちゃんと起きる", perfect.clashSpawns > 0,
   `${perfect.clashSpawns} 回`);
 
 await start();
