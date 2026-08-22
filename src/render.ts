@@ -23,7 +23,11 @@ const COL = {
   far: "#6d8a5c",
   ground: "#c9c2a6",
   pebble: "#9aa08a",
-  joint: "#b5ad90",
+  // 石畳。写真の板石に合わせて、灰色に少し緑と桃を混ぜた3種。
+  joint: "#6f6a5c",
+  stoneA: "#b9b5a4",
+  stoneB: "#a8a795",
+  stoneC: "#c6c0ad",
   groundDark: "#b5ad90",
   groundLight: "#d8d4bc",
   line: "#a89f80",
@@ -127,9 +131,19 @@ function drawAhead(ctx: CanvasRenderingContext2D, s: State, top: number, h: numb
     ctx.drawImage(SPR.senbei, Math.round(b.x), Math.round(base - 26 + bob));
   }
 
-  const frame = Math.floor(s.walkAcc / 9) % 2;
-  for (const d of s.deer) {
-    ctx.drawImage(SPR.deer[frame], Math.round(d.x), base - 4 - C.DEER_SIDE.h);
+  /**
+   * **下を向いているあいだは、鹿を描かない。**
+   *
+   * 暗幕を薄くして「読めるが読みにくい」にしていたが、読める以上は
+   * 下を向いたまま鹿を監視できてしまい、「ずっと押して鹿が来たら離す」が
+   * 最適手になっていた。それではフンを見る理由が無い。
+   * 見えないからこそ「急に来てびっくり」になる。
+   */
+  if (!s.down) {
+    const frame = Math.floor(s.walkAcc / 9) % 2;
+    for (const d of s.deer) {
+      ctx.drawImage(SPR.deer[frame], Math.round(d.x), base - 4 - C.DEER_SIDE.h);
+    }
   }
 
   // 子ども。前を見ているか下を向いているかは、**顔で分かる**のがいちばん速い。
@@ -164,28 +178,54 @@ function drawGround(ctx: CanvasRenderingContext2D, s: State, top: number, h: num
    * **下を向いたとき、目に入るのはほとんど地面**なので、逆が正しい。
    * 線から下はぜんぶ砂利（手前の地面）で埋まる。
    */
-  const base = top + Math.round(h * 0.30);
+  const base = top + Math.round(h * 0.24);
 
   ctx.fillStyle = COL.skyLow;
   ctx.fillRect(0, top, C.VIEW.w, Math.max(0, base - top));
 
-  ctx.fillStyle = COL.ground;
+  /**
+   * **石畳。** 砂利をやめてこれにした。
+   *
+   * 写真の参道は大きな板石が並んでいて、子どもは
+   * **どの石に足を置くか選びながら**歩いていた。足元がただの砂地だと
+   * 「地面」でしかないが、石が並んでいると「マス目」に見える——
+   * 何を見ればいいのかが、絵だけで分かる。
+   *
+   * 石の並びは決まった式から出しているので、作り直しても同じ模様が出る。
+   */
+  ctx.fillStyle = COL.joint;
   ctx.fillRect(0, base, C.VIEW.w, top + h - base);
-  ctx.fillStyle = COL.groundDark;
-  ctx.fillRect(0, base, C.VIEW.w, 1);
 
-  // 砂利。寄りの絵なので粒を大きく。ここが「速い」をいちばん強く伝える。
-  const period = 112;
-  const off = Math.floor(s.dist) % period;
-  const gh = Math.max(1, top + h - base - 3);
-  for (let i = 0; i < 420; i++) {
-    const gx = (i * 41) % (C.VIEW.w + period);
-    const gy = (i * 29) % gh;
-    const x = gx - off;
-    if (x < -2 || x > C.VIEW.w) continue;
-    const n = gravelAt(gx, gy);
-    ctx.fillStyle = n < 0.4 ? COL.groundDark : n > 0.88 ? COL.pebble : COL.groundLight;
-    ctx.fillRect(x, base + 3 + gy, 2, 2);
+  /**
+   * **手前ほど大きく。** 等間隔の格子にしたら煉瓦の壁に見えた。
+   * 写真の参道は、近くの石が大きく、奥へいくほど詰まって見える。
+   * 縦の高さと横幅の両方を手前ほど広げると、床として立ち上がる。
+   */
+  const gh = Math.max(1, top + h - base);
+  const scroll = Math.floor(s.dist);
+  const ROWS = 5;
+  // 手前ほど厚い行にする（重みが 1,2,3,... の比）
+  let weight = 0;
+  for (let r = 0; r < ROWS; r++) weight += r + 1;
+  let ry = base;
+  for (let r = 0; r < ROWS; r++) {
+    const rh = Math.max(3, Math.round((gh * (r + 1)) / weight));
+    const near = (r + 1) / ROWS;             // 0〜1。手前ほど1に近い
+    const sw = Math.round(C.STONE_W * (0.55 + near * 0.75));
+    const off = Math.floor(scroll * (0.72 + near * 0.35));
+    const stagger = r * 17;
+    const first = Math.floor((off - stagger) / sw);
+    for (let i = -1; i < C.VIEW.w / sw + 2; i++) {
+      const idx = first + i;
+      const sx = idx * sw - off + stagger;
+      const n = gravelAt(idx * 7, r * 31);
+      const w = sw - 2 - Math.round(n * 4);
+      ctx.fillStyle = n < 0.3 ? COL.stoneA : n < 0.62 ? COL.stoneB : COL.stoneC;
+      ctx.fillRect(sx, ry, w, Math.max(1, rh - 2));
+      ctx.fillStyle = "rgba(255,255,255,.10)";
+      ctx.fillRect(sx, ry, w, 1);
+    }
+    ry += rh;
   }
 
   // **フンは地面の線の上。靴と同じ高さを通る。**

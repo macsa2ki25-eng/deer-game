@@ -174,6 +174,83 @@ check("押すと下を見る", toggled.corner === true);
 check("離すと前を見る", toggled.released === false);
 check("画面のどこを押しても同じ", toggled.farCorner === true);
 
+// ---- いちばん守りたいこと ----
+section("どっちも同時には見られない");
+/**
+ * **下を向いているあいだ、鹿が画面に出ていないこと。**
+ *
+ * 遊んだ人の攻略法が「基本ずっと押していて、鹿が来た時だけ離す」になっていた。
+ * 暗幕が薄くて（0.55）、下を向いたまま鹿を監視できたから。
+ * 監視できる＝下を向くコストがゼロ＝フンを見る理由が無い。芯が死んでいた。
+ *
+ * 絵として本当に消えているかを、**画素で**確かめる。
+ */
+await start();
+const hidden = await page.evaluate(async () => {
+  const M = window.__mtd, s = M.state, C = M.config;
+  s.intro = 0;
+  // 鹿を目の前に置く
+  s.deer.push({ x: C.KID_X + 40, frame: 0, done: false });
+  const cv = document.getElementById("screen");
+  const g = cv.getContext("2d");
+  const countDeerBrown = () => {
+    const split = Math.round(C.HUD_H + C.FIELD_H * s.split);
+    const d = g.getImageData(0, C.HUD_H, C.VIEW.w, Math.max(1, split - C.HUD_H)).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      // 鹿の胴 #a87a4a に近い画素
+      if (Math.abs(d[i] - 0xa8) < 26 && Math.abs(d[i + 1] - 0x7a) < 26
+        && Math.abs(d[i + 2] - 0x4a) < 26) n++;
+    }
+    return n;
+  };
+  M.input.down = false;
+  for (let i = 0; i < 20; i++) await new Promise((r) => requestAnimationFrame(r));
+  const up = countDeerBrown();
+  M.input.down = true;
+  for (let i = 0; i < 40; i++) await new Promise((r) => requestAnimationFrame(r));
+  const down = countDeerBrown();
+  return { up, down };
+});
+check("前を見ていれば鹿が見える", hidden.up > 30, `鹿の色 ${hidden.up} 画素`);
+check("下を向いているあいだ鹿は見えない", hidden.down === 0, `鹿の色 ${hidden.down} 画素`);
+
+/**
+ * **合図も出さない。**
+ * 一度は「しか」の予告を出したが、予告があれば下を向いたままで済んでしまい、
+ * 「ずっと押していて鹿が来た時だけ離す」が復活する。
+ * 前を見ている間だけ分かる、でなければならない。
+ */
+const renderSrc = await readFile(resolve(DIST, "../src/render.ts"), "utf8");
+check("鹿が来る予告を画面に出していない", !/warn/i.test(renderSrc));
+
+/**
+ * **顔を上げる隙が、ちゃんとあること。**
+ *
+ * フンは「汚れた区間」で来るので、そのあいだ下を向きっぱなしになる。
+ * きれいな区間＝顔を上げる隙が無いと、集中したまま轢かれるだけになる。
+ * そして鹿は、その一巡のあいだに気づける長さだけ見えていなければならない。
+ */
+const rhythm = await page.evaluate(() => {
+  const C = window.__mtd.config;
+  const out = [];
+  for (let t = 0; t <= 200; t += 20) {
+    const v = C.speedAhead(t);
+    out.push({
+      down: (C.dirtyRun(t).max * C.STONE_W) / v,
+      gap: (C.cleanRun(t).min * C.STONE_W) / v,
+      see: (C.VIEW.w + 6 - C.KID_X) / (v * C.AHEAD_PARALLAX),
+    });
+  }
+  return out;
+});
+const worstGap = Math.min(...rhythm.map((r) => r.gap));
+const worstSee = Math.min(...rhythm.map((r) => r.see));
+const worstDown = Math.max(...rhythm.map((r) => r.down));
+check("顔を上げる隙がある", worstGap > 0.5, `いちばん短い隙 ${worstGap.toFixed(2)}秒`);
+check("鹿は、一巡するあいだ見えつづけている", worstSee > worstDown + worstGap,
+  `鹿が見えるのは ${worstSee.toFixed(1)}秒 ／ 集中+隙の一巡は ${(worstDown + worstGap).toFixed(1)}秒`);
+
 // ---- 公平さ ----
 section("理不尽にしないための仕掛け");
 const lead = await page.evaluate(() => {
@@ -258,16 +335,23 @@ const speeds = await page.evaluate(() => {
 check("下を向くと足が遅くなる", speeds.down < speeds.ahead * 0.8,
   `${speeds.ahead.toFixed(0)} → ${speeds.down.toFixed(0)} px/s`);
 
-// 距離そのものではなく **1秒あたり** で比べる。
-// どちらも3つ汚れたら終わるので、総距離だと「死ぬまでの長さ」に引っぱられる。
-await start();
-const ra = await drive(page, 12, "ahead");
-await start();
-const rd = await drive(page, 12, "down");
-const vA = ra.dist / Math.max(0.1, ra.t);
+/**
+ * **隙に顔を上げる人のほうが、稼げる。**
+ *
+ * 前は「ずっと前」対「ずっと下」で比べていたが、いまはどちらも下手なので
+ * 意味のある比較にならない（前だけ見ていると汚れた区間で転びまくり、
+ * 速さの得を転倒で失う）。
+ * 比べるべきは「必要なときだけ下を向く人」と「ずっと下を向いている人」。
+ * 顔を上げている時間がそのまま距離になる、というのがこのゲームの報酬。
+ */
+await skipIntro(20);
+const rp = await drive(page, 25, "perfect");
+await skipIntro(20);
+const rd = await drive(page, 25, "down");
+const vP = rp.dist / Math.max(0.1, rp.t);
 const vD = rd.dist / Math.max(0.1, rd.t);
-check("前を見ていたほうが、1秒あたり速く進む", vA > vD * 1.35,
-  `${vA.toFixed(0)} 対 ${vD.toFixed(0)} px/s`);
+check("必要なときだけ下を向く人のほうが、1秒あたり速く進む", vP > vD * 1.15,
+  `${vP.toFixed(0)} 対 ${vD.toFixed(0)} px/s`);
 
 // ---- 1回の長さ ----
 section("1回の長さ");

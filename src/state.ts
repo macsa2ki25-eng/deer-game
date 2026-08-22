@@ -71,10 +71,17 @@ export interface State {
   senbeis: Senbei[];
   scenery: Scenery[];
 
-  poopTimer: number;
+  /**
+   * 次の石を置く距離[px]。石は等間隔に流れてくる。
+   * フンは「汚れた区間」としてまとめて置くので、残りマス数を持つ。
+   */
+  nextStoneAt: number;
+  /** いま置いている区間の残りマス数と、それが汚れているか。 */
+  runLeft: number;
+  runDirty: boolean;
+
   deerTimer: number;
   /** 反対側と近すぎて出せなかった回数。詰まりすぎたときの逃げ道に使う。 */
-  poopBlocked: number;
   deerBlocked: number;
   senbeiTimer: number;
   sceneryTimer: number;
@@ -119,9 +126,10 @@ export function resetRun(s: State): void {
   s.senbeis = [];
   s.scenery = [];
   s.intro = C.INTRO_TIME;
-  s.poopBlocked = 0;
   s.deerBlocked = 0;
-  s.poopTimer = 1.6;
+  s.nextStoneAt = C.VIEW.w;
+  s.runLeft = 0;
+  s.runDirty = false;
   s.deerTimer = 4.4;
   s.senbeiTimer = 6;
   s.sceneryTimer = 0.5;

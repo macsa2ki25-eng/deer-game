@@ -82,8 +82,10 @@ export function step(s: State, dt: number): void {
 
   // ---- 流す ----
   for (const p of s.poops) p.x -= v * dt;
-  for (const d of s.deer) d.x -= v * dt * 1.35; // 鹿は歩いて向かってくるぶん速い
-  for (const b of s.senbeis) b.x -= v * dt;
+  // **鹿は遠くにいるので、視差でゆっくり流れる。**
+  // 足元と同じ速さで迫ってくると、顔を上げて確かめる暇がそもそも無い。
+  for (const d of s.deer) d.x -= v * dt * C.AHEAD_PARALLAX;
+  for (const b of s.senbeis) b.x -= v * dt * C.AHEAD_PARALLAX;
   // 奥のものはゆっくり流れる（視差）。手前の木ほど速い。
   for (const g of s.scenery) g.x -= v * dt * (g.kind === "treeFar" ? 0.22 : 0.5);
 
@@ -159,76 +161,76 @@ export function step(s: State, dt: number): void {
  * ふたつの流れを引き離すのに使う。
  */
 function arrival(x: number, isDeer: boolean, v: number): number {
-  return (x - C.KID_X) / (v * (isDeer ? 1.35 : 1));
+  return (x - C.KID_X) / (v * (isDeer ? C.AHEAD_PARALLAX : 1));
 }
 
-/** いま出すと、反対側のものと近すぎないか。 */
-function tooClose(s: State, isDeer: boolean, v: number): boolean {
-  const mine = arrival(C.VIEW.w, isDeer, v);
-  const others = isDeer
-    ? s.poops.filter((p) => !p.done).map((p) => arrival(p.x, false, v))
-    : s.deer.filter((d) => !d.done).map((d) => arrival(d.x, true, v));
-  return others.some((o) => Math.abs(o - mine) < C.SEPARATION);
+/**
+ * いま鹿を出すと、汚れた区間の真っ最中に着いてしまわないか。
+ *
+ * **汚れた区間のあいだは下を向いているので、鹿が来ても気づけない。**
+ * そこへ着かせると避けようが無い。きれいな区間に着くよう仕向ける。
+ * ただし完全には避けない——`clashChance` のぶんは、わざとそこへ着かせる。
+ */
+function landsOnDirt(s: State, v: number): boolean {
+  const mine = arrival(C.VIEW.w + 6, true, v);
+  return s.poops.some((p) => !p.done && Math.abs(arrival(p.x, false, v) - mine) < C.SEPARATION);
 }
 
 function spawn(s: State, dt: number): void {
   const v = C.speedAhead(s.t);
-
-  // 教えているあいだは、間隔を広げて1つずつにする。
   const introSlack = s.intro > 0 ? 1.9 : 1;
 
-  s.poopTimer -= dt;
+  /**
+   * **石をひとマスずつ置いていく。**
+   *
+   * フンを1粒ずつタイマーで出すのをやめた。それだと下を向くのが一瞬で済み、
+   * **「集中する」という状態が生まれない**。いまは石畳のマス目ごとに
+   * 汚れているかどうかが決まっていて、汚れは**何マスか続く**。
+   * 続いているあいだ、ずっと下を見ていることになる。
+   * きれいな区間が、顔を上げる隙になる。
+   */
+  s.nextStoneAt -= v * dt;
+  let guard = 0;
+  while (s.nextStoneAt <= C.VIEW.w && guard++ < 40) {
+    if (s.runLeft <= 0) {
+      s.runDirty = !s.runDirty;             // 汚れ → きれい → 汚れ …
+      const r = s.runDirty ? C.dirtyRun(s.t) : C.cleanRun(s.t);
+      const span = r.min + Math.floor(Math.random() * (r.max - r.min + 1));
+      // 教えているあいだは、きれいな区間を長めにして間を空ける
+      s.runLeft = Math.max(1, Math.round(span * (s.runDirty ? 1 : introSlack)));
+    }
+    if (s.runDirty) {
+      s.poops.push({
+        x: s.nextStoneAt + Math.round((Math.random() - 0.5) * 6),
+        big: Math.random() < 0.22,
+        done: false,
+      });
+    }
+    s.runLeft--;
+    s.nextStoneAt += C.STONE_W;
+  }
+
+  // ---- 鹿 ----
   s.deerTimer -= dt;
   s.senbeiTimer -= dt;
   s.sceneryTimer -= dt;
 
-  /**
-   * **反対側と近すぎるときは出さずに待つ。**
-   * これが無いと、たまたま同時に届く場面が年中生まれてしまう。
-   *
-   * ただし待ちっぱなしにはしない。詰まりすぎた設定を入れたときに
-   * 片方が永久に湧かなくなる（実際そうなって、山場が一度も起きなかった）。
-   * 間隔の下限は SEPARATION から逆算してあるので本来起きないが、
-   * **数字をいじったときに黙って壊れないように**、逃げ道を残しておく。
-   */
-  if (s.poopTimer <= 0) {
-    if (tooClose(s, false, v) && s.poopBlocked < 8) { s.poopTimer = 0.1; s.poopBlocked++; }
-    else s.poopBlocked = 0;
-  }
   if (s.deerTimer <= 0) {
-    if (tooClose(s, true, v) && s.deerBlocked < 8) { s.deerTimer = 0.1; s.deerBlocked++; }
-    else s.deerBlocked = 0;
-  }
-
-  if (s.poopTimer <= 0) {
-    s.poops.push({ x: C.VIEW.w + 4, big: Math.random() < 0.25, done: false });
-    s.poopTimer = Math.max(C.MIN_GAP, C.poopInterval(s.t) * (0.75 + Math.random() * 0.5))
-      * introSlack;
-
-
-  }
-
-  if (s.deerTimer <= 0) {
-    s.deer.push({ x: C.VIEW.w + 6, frame: 0, done: false });
-    s.deerTimer = Math.max(C.MIN_GAP, C.deerInterval(s.t) * (0.75 + Math.random() * 0.5))
-      * introSlack;
-
     /**
-     * ときどき、**鹿のすぐ後ろにフンを置く**。このゲームの山場。
-     *
-     * 前は「フンを出すとき、ついでに鹿も」という向きで書いていて、
-     * 鹿のほうが速く着くので差が 0.20〜0.33秒 しかなかった。
-     * 反応時間 0.45秒 に届かず、しかも切り替えて戻すので2回要る——
-     * 文字どおり「どうにもならない」場面になっていた。
-     *
-     * いまは鹿を先に出し、**フンが CLASH_GAP 後に着くよう時刻で逆算する**。
-     * 見てから前→下と動かせる。際どいが、間に合う。
+     * 汚れた区間の真っ最中に着く鹿は、原則ずらす（気づきようが無いので）。
+     * ただし `clashChance` のぶんは、**わざとそこへ着かせる**。
+     * それがこのゲームの山場——集中しているところへ、急に来る。
      */
-    if (Math.random() < C.clashChance(s.t)) {
-      const deerArrive = arrival(C.VIEW.w + 6, true, v);
-      const poopFlight = arrival(C.VIEW.w + 4, false, v);
-      s.poopTimer = Math.max(0.05, C.CLASH_GAP + deerArrive - poopFlight);
-      s.clashSpawns++;
+    const deliberate = Math.random() < C.clashChance(s.t);
+    if (!deliberate && landsOnDirt(s, v) && s.deerBlocked < 10) {
+      s.deerTimer = 0.12;
+      s.deerBlocked++;
+    } else {
+      if (deliberate) s.clashSpawns++;
+      s.deerBlocked = 0;
+      s.deer.push({ x: C.VIEW.w + 6, frame: 0, done: false });
+      s.deerTimer = Math.max(C.MIN_GAP, C.deerInterval(s.t) * (0.75 + Math.random() * 0.5))
+        * introSlack;
     }
   }
 
@@ -246,7 +248,6 @@ function spawn(s: State, dt: number): void {
     });
     s.sceneryTimer = 0.35 + Math.random() * 0.6;
   }
-
 }
 
 export type { Deer, Poop };
