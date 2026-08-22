@@ -58,11 +58,22 @@ export interface State {
   split: number;
   /** 視線を切り替えた時刻。すれすれボーナスの判定に使う。 */
   lastLook: number;
+  /**
+   * 前のフレームの視線。切り替わった瞬間を拾うためだけに持つ。
+   * **`down` はゲームの外（指）から書かれる**ので、
+   * 切り替わりはここで自分で見つけるしかない。
+   */
+  wasDown: boolean;
 
   /** 転んでいる残り時間[s]。0 なら走っている。 */
   trip: number;
   /** 跨いだ足を出している残り時間[s]。 */
   stepping: number;
+  /**
+   * **とんでいる残り時間[s]。大きいフンを越えた瞬間に立つ。**
+   * 絵のためだけの値。跳べたかどうかは、そのとき前を見ていたかで決まる。
+   */
+  hop: number;
   /** 走りのコマ送り。 */
   walkAcc: number;
 
@@ -79,6 +90,14 @@ export interface State {
   /** いま置いている区間の残りマス数と、それが汚れているか。 */
   runLeft: number;
   runDirty: boolean;
+  /** いまの区間のマス数（何マス目かを数えるのに使う）。 */
+  runLen: number;
+  /**
+   * この汚れた区間の何マス目に大きいフンを置くか。-1 なら置かない。
+   * **手前 BIG_GAP マスは空ける**——顔を上げるための隙で、
+   * 空いたマスの並びがそのまま「来るぞ」の合図になる。
+   */
+  bigAt: number;
 
   deerTimer: number;
   /** 反対側と近すぎて出せなかった回数。詰まりすぎたときの逃げ道に使う。 */
@@ -99,6 +118,9 @@ export interface State {
   poopHits: number;
   deerHits: number;
   dodges: number;
+  /** 大きいフンをとびこえた回数／踏んだ回数。 */
+  jumps: number;
+  jumpMiss: number;
   nices: number;
   best: number;
 }
@@ -118,8 +140,10 @@ export function resetRun(s: State): void {
   s.down = false;
   s.split = 0.62;
   s.lastLook = -9;
+  s.wasDown = false;
   s.trip = 0;
   s.stepping = 0;
+  s.hop = 0;
   s.walkAcc = 0;
   s.poops = [];
   s.deer = [];
@@ -130,6 +154,8 @@ export function resetRun(s: State): void {
   s.nextStoneAt = C.VIEW.w;
   s.runLeft = 0;
   s.runDirty = false;
+  s.runLen = 0;
+  s.bigAt = -1;
   s.deerTimer = 4.4;
   s.senbeiTimer = 6;
   s.sceneryTimer = 0.5;
@@ -139,5 +165,7 @@ export function resetRun(s: State): void {
   s.poopHits = 0;
   s.deerHits = 0;
   s.dodges = 0;
+  s.jumps = 0;
+  s.jumpMiss = 0;
   s.nices = 0;
 }

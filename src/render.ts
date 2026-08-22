@@ -146,9 +146,16 @@ function drawAhead(ctx: CanvasRenderingContext2D, s: State, top: number, h: numb
     }
   }
 
-  // 子ども。前を見ているか下を向いているかは、**顔で分かる**のがいちばん速い。
-  const kid = s.trip > 0 ? SPR.kidTrip : s.down ? SPR.kidDown : SPR.kidUp;
-  ctx.drawImage(kid, C.KID_X - 3, base - 4 - C.KID_HEAD.h);
+  /**
+   * 子ども。前を見ているか下を向いているかは、**顔で分かる**のがいちばん速い。
+   *
+   * とんでいる1コマだけは、ここで持ち上げて描く。大きいフンを越えた瞬間は
+   * 顔が上がっているので足元の帯が暗く、**この絵しか成否を伝えるものが無い**。
+   */
+  const jumping = s.hop > 0 && s.trip <= 0;
+  const kid = s.trip > 0 ? SPR.kidTrip : jumping ? SPR.kidJump : s.down ? SPR.kidDown : SPR.kidUp;
+  const lift = jumping ? 3 : 0;
+  ctx.drawImage(kid, C.KID_X - 3, base - 4 - C.KID_HEAD.h - lift);
 
   ctx.restore();
 }
@@ -229,9 +236,19 @@ function drawGround(ctx: CanvasRenderingContext2D, s: State, top: number, h: num
   }
 
   // **フンは地面の線の上。靴と同じ高さを通る。**
+  /**
+   * フン。**大きいのは「またぐもの」なので、見てすぐ分かる必要がある。**
+   * 同じ茶色の塊が大小あるだけだと、来てから気づいて間に合わない。
+   * 影を落として、地面から盛り上がって見えるようにしてある。
+   */
   for (const p of s.poops) {
     const spr = p.big ? SPR.poopBig : SPR.poop;
-    ctx.drawImage(spr, Math.round(p.x), base - spr.height + 2);
+    const x = Math.round(p.x);
+    if (p.big) {
+      ctx.fillStyle = "rgba(32,26,36,.32)";
+      ctx.fillRect(x - 2, base + 1, spr.width + 4, 3);
+    }
+    ctx.drawImage(spr, x, base - spr.height + 2);
   }
 
   // 足。跨いだ瞬間だけ前足が上がる——「自分で避けた」感はこの1コマで出る。
@@ -261,14 +278,20 @@ function bandLabel(
  * 説明文を増やすのではなく、**そのとき押すべきかどうかを、その場に出す**。
  */
 function introPrompt(ctx: CanvasRenderingContext2D, s: State, split: number): void {
-  let poop = Infinity;
-  let deer = Infinity;
-  for (const p of s.poops) if (!p.done) poop = Math.min(poop, p.x - C.KID_X);
-  for (const d of s.deer) if (!d.done) deer = Math.min(deer, (d.x - C.KID_X) / 1.35);
+  // 下を向くべきもの（小さいフン）と、顔を上げるべきもの（鹿・大きいフン）。
+  // **大きいフンは、とぶために顔を上げる側**。ここを間違えると教え方が逆になる。
+  let wantsDown = Infinity;
+  let wantsUp = Infinity;
+  for (const p of s.poops) {
+    if (p.done) continue;
+    if (p.big) wantsUp = Math.min(wantsUp, p.x - C.KID_X);
+    else wantsDown = Math.min(wantsDown, p.x - C.KID_X);
+  }
+  for (const d of s.deer) if (!d.done) wantsUp = Math.min(wantsUp, (d.x - C.KID_X) / 1.35);
 
-  const near = Math.min(poop, deer);
+  const near = Math.min(wantsDown, wantsUp);
   if (near > 95) return;
-  const wantDown = poop <= deer;
+  const wantDown = wantsDown <= wantsUp;
 
   const msg = wantDown ? "▼ おす" : "▲ はなす";
   const ok = wantDown === s.down;

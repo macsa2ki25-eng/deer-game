@@ -8,7 +8,7 @@
  */
 
 export interface InputState {
-  /** いま押されているか。game.ts はこれしか見ない。 */
+  /** いま押されているか。視線はこれで決まる。 */
   down: boolean;
   /** 押した／離した回数。検証用。 */
   toggles: number;

@@ -88,7 +88,7 @@ function frame(now: number): void {
   last = now;
   if (dt > 0.25) dt = 0.25; // タブ復帰などで一気に進めない
 
-  // 指の状態をそのまま視線にする。ここが操作の全部。
+  // 指の状態がそのまま視線。ゲームが読む操作はこれだけ。
   state.down = input.down;
 
   acc += dt;

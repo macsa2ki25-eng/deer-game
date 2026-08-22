@@ -3,8 +3,8 @@
  *
  * 遊びの芯はここの `s.down` 1ビットだけ:
  *
- *   下を見ている → 足元のフンを跨ぐ。鹿は見えないのでぶつかる。足が遅い
- *   前を見ている → 鹿をよける。足元は踏む。速い
+ *   下を見ている → 足元の小さいフンを避ける。鹿は見えない。足が遅い
+ *   前を見ている → 鹿をよける。大きいフンをとびこえる。足元は踏む。速い
  *
  * **当たり判定は「重なったか」ではなく「通り過ぎたか」で取る。**
  * 重なりで取ると、判定の幅の分だけ「あと数px」が生まれ、
@@ -58,10 +58,24 @@ function nice(s: State): boolean {
   return s.t - s.lastLook < C.NICE_WINDOW;
 }
 
+/** 1フレーム進める。操作は `s.down` の1ビットだけ。 */
 export function step(s: State, dt: number): void {
   if (s.phase !== "playing") return;
 
   s.t += dt;
+  s.hop = Math.max(0, s.hop - dt);
+
+  /**
+   * 視線が切り替わった瞬間を拾う。**すれすれボーナスはこれが素**。
+   * `down` は指から直接書かれるので、切り替わりは自分で見つける。
+   * （ここが抜けていて、`lastLook` が初期値のまま動かず、
+   *   「すれすれ！」は一度も出ていなかった。褒めるところが無ければ、
+   *   ぎりぎりまで我慢する理由も無い。）
+   */
+  if (s.down !== s.wasDown) {
+    s.wasDown = s.down;
+    s.lastLook = s.t;
+  }
   s.intro = Math.max(0, s.intro - dt);
   s.bannerT -= dt;
   s.stepping = Math.max(0, s.stepping - dt);
@@ -98,6 +112,39 @@ export function step(s: State, dt: number): void {
   for (const p of s.poops) {
     if (p.done || p.x + C.POOP_SIDE.w / 2 > C.KID_X) continue;
     p.done = true;
+    /**
+     * **大きいフンは、下を向いたままでは越えられない。とびこえる。**
+     *
+     * とぶには助走が要るので、うつむいた ちょこちょこ歩きでは跳べない。
+     * 小さいフンとちょうど逆——ここだけ、顔を上げていた人が越える。
+     * 見るのは下、越えるのは上。この逆向きが、このゲームの山になる。
+     */
+    if (p.big) {
+      if (!s.down) {
+        s.dodges++;
+        s.jumps++;
+        s.hop = C.HOP_TIME;
+        s.stepping = C.HOP_TIME;
+        sfx.jump();
+        if (nice(s)) {
+          // ぎりぎりで顔を上げて跳んだ。いちばん褒めるところ
+          s.nices++;
+          s.score += C.JUMP_SCORE + C.NICE_SCORE;
+          banner(s, "ぎりぎり とんだ！", 0.7);
+        } else {
+          s.score += C.JUMP_SCORE;
+          banner(s, "とびこえた！", 0.6);
+        }
+      } else {
+        s.poopHits++;
+        s.jumpMiss++;
+        sfx.squish();
+        hurt(s, "でかいのは とぶ", C.TRIP_POOP);
+        return;
+      }
+      continue;
+    }
+
     if (s.down) {
       s.dodges++;
       s.stepping = 0.22;
@@ -149,7 +196,7 @@ export function step(s: State, dt: number): void {
   s.senbeis = s.senbeis.filter((b) => b.x > -20);
   s.scenery = s.scenery.filter((g) => g.x > -70);
 
-  spawn(s, dt);
+  spawn(s, dt, v);
 }
 
 /**
@@ -176,7 +223,18 @@ function landsOnDirt(s: State, v: number): boolean {
   return s.poops.some((p) => !p.done && Math.abs(arrival(p.x, false, v) - mine) < C.SEPARATION);
 }
 
-function spawn(s: State, dt: number): void {
+function spawn(s: State, dt: number, vw: number): void {
+  /**
+   * ふたつの速さを使い分ける。混ぜると壊れる。
+   *
+   *   vw = いま実際に流れている速さ。**石を置く位置**はこちら
+   *   v  = 名目の速さ（前を見て走っているとき）。**鹿がいつ着くか**の予測はこちら
+   *
+   * 石をここで `v` で送っていて、世界は `speed()`（下を向くと 0.62倍）で
+   * 流していた。**下を向いているあいだだけ、石の間隔が 30px → 19px に詰まっていた。**
+   * 設計した隙が軒並み 0.62倍になっていたうえ、描いてある石畳（実距離で流れる）と
+   * フンの位置も合っていなかった。下を向くほど詰まるのは、意味としても逆。
+   */
   const v = C.speedAhead(s.t);
   const introSlack = s.intro > 0 ? 1.9 : 1;
 
@@ -189,7 +247,7 @@ function spawn(s: State, dt: number): void {
    * 続いているあいだ、ずっと下を見ていることになる。
    * きれいな区間が、顔を上げる隙になる。
    */
-  s.nextStoneAt -= v * dt;
+  s.nextStoneAt -= vw * dt;
   let guard = 0;
   while (s.nextStoneAt <= C.VIEW.w && guard++ < 40) {
     if (s.runLeft <= 0) {
@@ -198,13 +256,37 @@ function spawn(s: State, dt: number): void {
       const span = r.min + Math.floor(Math.random() * (r.max - r.min + 1));
       // 教えているあいだは、きれいな区間を長めにして間を空ける
       s.runLeft = Math.max(1, Math.round(span * (s.runDirty ? 1 : introSlack)));
+
+      /**
+       * **大きいフンは、汚れた区間の最後のマスに置く。**
+       *
+       * きれいな区間に単独で置いていたが、きれいな区間ではどうせ顔を
+       * 上げているので、**ただ通り過ぎるだけ**になっていた。
+       * 危ないのは、下を向いて小さいフンを避けている真っ最中に来ることだ。
+       * 手前 BIG_GAP マスを空けて、そこを顔を上げる隙にする。
+       * 空きマスの並びが「来るぞ」の合図になり、跳んだ先はきれいな区間。
+       */
+      s.bigAt = -1;
+      if (s.runDirty && s.t > 4 && Math.random() < C.bigChance(s.t)) {
+        s.runLeft = Math.max(s.runLeft, C.BIG_RUN_MIN);
+        s.bigAt = s.runLeft - 1;
+      }
+      s.runLen = s.runLeft;
     }
+
     if (s.runDirty) {
-      s.poops.push({
-        x: s.nextStoneAt + Math.round((Math.random() - 0.5) * 6),
-        big: Math.random() < 0.22,
-        done: false,
-      });
+      const idx = s.runLen - s.runLeft;     // この区間の何マス目か
+      if (idx === s.bigAt) {
+        s.poops.push({ x: s.nextStoneAt, big: true, done: false });
+      } else if (s.bigAt < 0 || idx < s.bigAt - C.BIG_GAP) {
+        // 汚れた区間の本体は**小さいフンだけ**。
+        s.poops.push({
+          x: s.nextStoneAt + Math.round((Math.random() - 0.5) * 6),
+          big: false,
+          done: false,
+        });
+      }
+      // bigAt の手前 BIG_GAP マスは空ける。ここが顔を上げる隙
     }
     s.runLeft--;
     s.nextStoneAt += C.STONE_W;

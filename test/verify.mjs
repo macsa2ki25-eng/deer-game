@@ -69,7 +69,7 @@ window.__bot = (spec) => new Promise((done) => {
       done({
         phase: s.phase, t: s.t, dist: s.dist, score: s.score, dirt: s.dirt,
         poopHits: s.poopHits, deerHits: s.deerHits, dodges: s.dodges, nices: s.nices,
-        clashSpawns: s.clashSpawns,
+        clashSpawns: s.clashSpawns, jumps: s.jumps, jumpMiss: s.jumpMiss,
         ...seen,
       });
       return;
@@ -78,9 +78,11 @@ window.__bot = (spec) => new Promise((done) => {
     // いちばん近い「まだ決着していない」もの
     // ゲーム側と同じ「まんなかで判定」に合わせる。ここがずれていると、
     // ボットは決着済みと思っているのにゲームはまだ待っている、が起きる。
-    let nextPoop = null, nextDeer = null;
+    let nextPoop = null, nextBig = null, nextDeer = null;
     for (const p of s.poops) if (!p.done && p.x + C.POOP_SIDE.w / 2 > C.KID_X) {
-      if (!nextPoop || p.x < nextPoop.x) nextPoop = p;
+      // 大きいフンは「顔を上げてとびこえる」ので、鹿と同じ側に数える
+      if (p.big) { if (!nextBig || p.x < nextBig.x) nextBig = p; }
+      else if (!nextPoop || p.x < nextPoop.x) nextPoop = p;
     }
     for (const d of s.deer) if (!d.done && d.x + C.DEER_SIDE.w / 2 > C.KID_X) {
       if (!nextDeer || d.x < nextDeer.x) nextDeer = d;
@@ -95,9 +97,11 @@ window.__bot = (spec) => new Promise((done) => {
     else {
       // 近いほうに合わせる。届くまでの距離で比べる。
       const dp = nextPoop ? nextPoop.x + C.POOP_SIDE.w / 2 - C.KID_X : Infinity;
+      const db = nextBig ? nextBig.x + C.POOP_SIDE.w / 2 - C.KID_X : Infinity;
       const dd = nextDeer ? (nextDeer.x + C.DEER_SIDE.w / 2 - C.KID_X) / 1.35 : Infinity;
-      down = dp < dd;
+      down = dp < Math.min(db, dd);
     }
+
     if (wasDown !== null && down !== wasDown) seen.toggles++;
     wasDown = down;
     M.input.down = down;
@@ -108,9 +112,9 @@ window.__bot = (spec) => new Promise((done) => {
 });
 `;
 
-async function drive(page, seconds, look) {
+async function drive(page, seconds, look, extra = {}) {
   await page.evaluate(BOT);
-  return page.evaluate((spec) => window.__bot(spec), { seconds, look });
+  return page.evaluate((spec) => window.__bot(spec), { seconds, look, ...extra });
 }
 
 // ---------------------------------------------------------------- 走らせる
@@ -237,7 +241,10 @@ const rhythm = await page.evaluate(() => {
   for (let t = 0; t <= 200; t += 20) {
     const v = C.speedAhead(t);
     out.push({
-      down: (C.dirtyRun(t).max * C.STONE_W) / v,
+      // **汚れた区間は下を向いて通る＝足が遅い。**そのぶん長くかかる。
+      // ここを名目の速さで見積もっていて、集中の長さを 0.62倍に見誤っていた。
+      down: (C.dirtyRun(t).max * C.STONE_W) / (v * C.SLOW_FACTOR),
+      // きれいな区間は顔を上げて通るので、名目の速さ。
       gap: (C.cleanRun(t).min * C.STONE_W) / v,
       see: (C.VIEW.w + 6 - C.KID_X) / (v * C.AHEAD_PARALLAX),
     });
@@ -327,6 +334,115 @@ check("下だけ見ていると鹿にぶつかって終わる", onlyDown.phase =
   `${onlyDown.dist.toFixed(0)}px / フン${onlyDown.poopHits} 鹿${onlyDown.deerHits}`);
 
 // ---- 速さが risk/reward を兼ねる ----
+section("でかいフンは とびこえる");
+/**
+ * **下を向いているだけでは避けられないものが要る。**
+ *
+ * 「ふんをよけるスリルが欲しい」——下を向いていれば自動で避かるかぎり、
+ * **失敗しうる瞬間がどこにも無い**。スリルは「いま失敗するかもしれない」
+ * からしか出ない。だから大きいフンだけは、顔を上げた人だけが越えられる。
+ *
+ * 操作は増やしていない。増やすと「テクニックが要るゲーム」に逆戻りする。
+ * 見るのは下、越えるのは上——この逆向きだけで山を作る。
+ */
+await skipIntro(30);
+const jumpRun = await drive(page, 30, "perfect");
+check("顔を上げていれば とびこえられる", jumpRun.jumps > 0,
+  `${jumpRun.jumps} 回とびこえた`);
+
+// 下を向いたままでは越えられない（＝顔を上げることが本当に要る）
+await skipIntro(30);
+const noJump = await drive(page, 30, "down");
+check("下を向いたままでは、でかいフンは越えられない",
+  noJump.jumps === 0 && noJump.jumpMiss > 0,
+  `とびこえた ${noJump.jumps} 回 / 踏んだ ${noJump.jumpMiss} 回`);
+
+/**
+ * **でかいフンの手前は空いている。**
+ *
+ * 小さいフンを避けている姿勢のまま、いきなり「顔を上げろ」が来たら
+ * それは避けようが無い。手前を空けて、そこを顔を上げる隙にしてある。
+ * 空きマスの並びが、そのまま「来るぞ」の合図にもなっている。
+ */
+const gap = await page.evaluate(() => new Promise((done) => {
+  const M = window.__mtd, s = M.state, C = M.config;
+  s.intro = 0;
+  s.t = 90;                          // 本番の濃さで見る
+  // **前の走行の残りを片付けてから測る。**
+  // 死んだ走行のフンが残っていると、区間と関係ない並びを測ってしまう。
+  s.poops = [];
+  s.deer = [];
+  s.runLeft = 0;
+  s.runDirty = false;
+  s.bigAt = -1;
+  s.nextStoneAt = C.VIEW.w;
+  const measured = new WeakSet();
+  let worst = Infinity, n = 0;
+  const t0 = performance.now();
+  const tick = () => {
+    // 測るあいだは終わらせない。転びも飛ばして、置かれ方だけを見る
+    s.dirt = 0;
+    s.trip = 0;
+    s.phase = "playing";
+    /**
+     * **下を向いたまま測る。**そこがいちばん詰まりやすいところ。
+     * 石を置く送りが名目の速さのままで、世界が 0.62倍で流れていたときは、
+     * 下を向いているあいだだけ間隔が 30px → 19px に詰まっていた。
+     * 設計した隙が軒並み 0.62倍になっていて、ここでしか見つからなかった。
+     */
+    M.input.down = true;
+    // **出てきた瞬間に測る。**同じ区間の小さいフンは、もう左に並んでいる
+    for (const b of s.poops) {
+      if (!b.big || measured.has(b)) continue;
+      measured.add(b);
+      let last = -Infinity;
+      for (const p of s.poops) if (!p.big && p.x < b.x) last = Math.max(last, p.x);
+      if (last === -Infinity) continue;
+      n++;
+      worst = Math.min(worst, b.x - last);
+    }
+    if (performance.now() - t0 < 18000) requestAnimationFrame(tick);
+    else done({
+      worst, n,
+      need: (C.BIG_GAP + 1) * C.STONE_W,
+      v: C.speedAhead(s.t) * C.SLOW_FACTOR,
+    });
+  };
+  requestAnimationFrame(tick);
+}));
+check("でかいフンの手前は空いている",
+  gap.n >= 3 && gap.worst >= gap.need - 6,
+  `いちばん詰まって ${gap.worst.toFixed(0)}px（${(gap.worst / gap.v).toFixed(2)}秒）/ ${gap.n} 個で確認`);
+
+/**
+ * **「すれすれ！」が本当に鳴ること。**
+ *
+ * ぎりぎりまで待って切り替えたら褒める、という上乗せを置いてあるが、
+ * 視線を切り替えた時刻を誰も記録していなくて、**一度も出ていなかった**。
+ * 褒めるところが無ければ、ぎりぎりまで我慢する理由も無い。仕組みで縛る。
+ */
+await start();
+const grazed = await page.evaluate(async () => {
+  const M = window.__mtd, s = M.state, C = M.config;
+  const wait = (n) => new Promise((r) => {
+    const f = () => (n-- > 0 ? requestAnimationFrame(f) : r());
+    f();
+  });
+  s.intro = 0;
+  s.poops = [];
+  s.deer = [];
+  s.nices = 0;
+  M.input.down = false;
+  await wait(4);
+  M.input.down = true;              // いま切り替えた
+  await wait(1);
+  s.poops.push({ x: C.KID_X + 2, big: false, done: false });
+  await wait(14);                   // 0.23秒。すれすれの範囲で通り過ぎる
+  return { nices: s.nices, sinceLook: s.t - s.lastLook };
+});
+check("ぎりぎりで切り替えたら すれすれが出る", grazed.nices > 0,
+  `切り替えから ${grazed.sinceLook.toFixed(2)}秒 で通過 / すれすれ ${grazed.nices} 回`);
+
 section("前を見ると速い");
 const speeds = await page.evaluate(() => {
   const C = window.__mtd.config;
