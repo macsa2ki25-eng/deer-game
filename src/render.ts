@@ -14,7 +14,7 @@
 import * as C from "./config";
 import type { State } from "./state";
 import { HUD, SPR, pick, type Sprite } from "./sprites";
-import { LANE_BAND } from "./input";
+import { LANE_BAND, LANES } from "./input";
 
 const CX = C.VIEW.w / 2;
 /** 足元での参道の半幅。 */
@@ -33,6 +33,7 @@ const COL = {
   slabC: "#c7c1ae",
   slabD: "#b2ae9c",
   joint: "#6e6a5c",
+  jointDeep: "#4f4c41",
   edge: "#8d8a76",
   hud: "#11140e",
   ink: "#201a24",
@@ -128,10 +129,17 @@ function drawRoad(ctx: CanvasRenderingContext2D, s: State): void {
 
     const band = Math.floor((s.dist + z) / BAND);
     const alt = ((band % 2) + 2) % 2;
-    ctx.fillStyle = alt ? COL.slabA : COL.slabC;
-    ctx.fillRect(l, y, Math.max(1, CX - l), 1);
-    ctx.fillStyle = alt ? COL.slabD : COL.slabB;
-    ctx.fillRect(Math.round(CX), y, Math.max(1, r - CX), 1);
+    /**
+     * **石は3列。列がそのままレーン。**
+     * 何を選んでいるのかが、絵だけで分かる。
+     */
+    for (let i = 0; i < C.LANES; i++) {
+      const x0 = Math.round(l + ((r - l) * i) / C.LANES);
+      const x1 = Math.round(l + ((r - l) * (i + 1)) / C.LANES);
+      const light = (alt + i) % 2 === 0;
+      ctx.fillStyle = light ? COL.slabC : COL.slabB;
+      ctx.fillRect(x0, y, Math.max(1, x1 - x0), 1);
+    }
 
     // 石の継ぎ目。奥ほど詰まって見えるので、遠近がそのまま速さになる
     if (band !== lastBand) {
@@ -140,13 +148,18 @@ function drawRoad(ctx: CanvasRenderingContext2D, s: State): void {
       lastBand = band;
     }
     /**
-     * **まん中の目地＝レーンの境目。**
-     * ここが読めないと「左か右か」というゲームであることが伝わらない。
-     * 手前ほど太くして、石が2列に並んでいるように見せる。
+     * **縦の目地＝レーンの境目。ここがいちばん大事な線。**
+     * 3本のうちどこに居るのかが読めないと、ゲームとして成立しない。
+     * 横の継ぎ目より濃く、手前ほど太くする。
      */
-    const mid = Math.max(1, Math.round(3 * sc));
-    ctx.fillStyle = COL.joint;
-    ctx.fillRect(Math.round(CX) - Math.ceil(mid / 2), y, mid, 1);
+    const mid = Math.max(1, Math.round(3.5 * sc));
+    for (let i = 1; i < C.LANES; i++) {
+      const x = Math.round(l + ((r - l) * i) / C.LANES);
+      ctx.fillStyle = COL.jointDeep;
+      ctx.fillRect(x - Math.ceil(mid / 2), y, mid, 1);
+      ctx.fillStyle = "rgba(255,255,255,.13)";
+      ctx.fillRect(x + Math.floor(mid / 2), y, 1, 1);
+    }
     ctx.fillStyle = COL.edge;
     ctx.fillRect(l, y, 1, 1);
     ctx.fillRect(r - 1, y, 1, 1);
@@ -157,11 +170,12 @@ function drawRoad(ctx: CanvasRenderingContext2D, s: State): void {
 function laneX(lane: number, sc: number): number {
   return CX + (C.LANE_X[lane] - CX) * sc;
 }
-/** `lx`（小数）の画面x。見た目だけに使う。 */
+/** `lx`（小数）の画面x。レーンのあいだを滑る見た目のためだけに使う。 */
 function lxToX(lx: number, sc: number): number {
-  const a = C.LANE_X[0];
-  const b = C.LANE_X[1];
-  return CX + (a + (b - a) * lx - CX) * sc;
+  const i = Math.min(C.LANES - 2, Math.max(0, Math.floor(lx)));
+  const a = C.LANE_X[i];
+  const b = C.LANE_X[i + 1];
+  return CX + (a + (b - a) * (lx - i) - CX) * sc;
 }
 
 /** 奥のものから順に描く。手前が奥を隠す。 */
@@ -215,7 +229,9 @@ export function render(ctx: CanvasRenderingContext2D, s: State): void {
    */
   if (s.down) {
     for (const p of byDepth(s.poops)) {
-      if (p.done || p.z <= 0 || p.z > C.POOP_SEE) continue;
+      // **足元で消さない。**踏んだのか避けたのか分からなくなる。
+      // 画面の下へ抜けていくところまで描く。
+      if (p.z < -55 || p.z > C.POOP_SEE) continue;
       const sc = C.scaleOf(p.z);
       const y = C.yOf(p.z);
       if (p.big) {
@@ -240,29 +256,35 @@ export function render(ctx: CanvasRenderingContext2D, s: State): void {
   ctx.fillRect(0, by - 1, C.VIEW.w, 1);
 
   /**
-   * **鹿は顔を上げているあいだだけ。暗幕の上に描く。**
-   * 鹿は「奥にあるもの」なので、足元を隠す幕には隠されない。
-   * 目の前まで来たときに消えてしまうと、何に当たったのか分からなくなる。
+   * **鹿。暗幕の上に描く。**鹿は「奥にあるもの」なので、
+   * 足元を隠す幕には隠されない。
+   *
+   * 顔を上げていれば、奥から来るのが全部見える。
+   * **下を向いていても、目の前まで来たものは視界の端に入る。**
+   * 完全に消していたら「上で見た鹿を通り過ぎたのか分からない」と言われた。
+   * うつむいて歩いていても、足のすぐ前のものは見える。ただし
+   * 見えはじめてから届くまで 0.40秒しかないので、そこから避けるのは無理——
+   * 予告ではなく、**通り過ぎたことが分かるだけ**の知らせ。
    */
-  if (!s.down) {
-    const frame = Math.floor(s.walkAcc / 22) % 2;
-    for (const d of byDepth(s.deer)) {
-      if (d.done || d.z <= 0) continue;
-      const sc = C.scaleOf(d.z);
-      const x = laneX(d.lane, sc);
-      shadow(ctx, x, C.yOf(d.z), 22 * sc);
-      drawSprite(ctx, pick(SPR.deer[frame], sc), x, C.yOf(d.z));
-    }
+  const near = C.peripheralZ(s.t);
+  const frame = Math.floor(s.walkAcc / 22) % 2;
+  for (const d of byDepth(s.deer)) {
+    if (d.z < -55) continue;
+    if (s.down && d.z > near) continue;
+    const sc = C.scaleOf(d.z);
+    const x = laneX(d.lane, sc);
+    shadow(ctx, x, C.yOf(d.z), 22 * sc);
+    drawSprite(ctx, pick(SPR.deer[frame], sc), x, C.yOf(d.z));
   }
 
   // 子ども。いつでも暗幕の上に描く——自分がどこに居るかは常に見えていい
   const jumping = s.hop > 0 && s.trip <= 0;
-  const frame = Math.floor(s.walkAcc / 13) % 2;
+  const kidFrame = Math.floor(s.walkAcc / 13) % 2;
   const kid = s.trip > 0
     ? SPR.kidTrip
     : jumping
       ? SPR.kidJump
-      : (s.down ? SPR.kidDown : SPR.kidUp)[frame];
+      : (s.down ? SPR.kidDown : SPR.kidUp)[kidFrame];
   const bob = s.trip > 0 ? 0 : Math.floor(s.walkAcc / 13) % 2;
   const kx = lxToX(s.lx, 1);
   shadow(ctx, kx, C.KID_Y + 1, jumping ? 10 : 14);
@@ -314,7 +336,10 @@ function zoneGuide(ctx: CanvasRenderingContext2D, s: State): void {
   // 区切り線
   ctx.fillStyle = "rgba(230,192,106,.35)";
   for (let x = 0; x < C.VIEW.w; x += 4) ctx.fillRect(x, bandY, 2, 1);
-  for (let y = bandY; y < C.VIEW.h; y += 4) ctx.fillRect(CX - 1, y, 1, 2);
+  for (let i = 1; i < LANES; i++) {
+    const x = Math.round((C.VIEW.w * i) / LANES);
+    for (let y = bandY; y < C.VIEW.h; y += 4) ctx.fillRect(x, y, 1, 2);
+  }
 
   // 地面の上に直接書くと読めないので、下敷きを敷く
   ctx.font = "7px monospace";
@@ -327,8 +352,10 @@ function zoneGuide(ctx: CanvasRenderingContext2D, s: State): void {
     ctx.fillText(str, x, y);
   };
   label("ここを さわると まえを みる", CX, bandY - 4);
-  label("◀ ひだり", CX / 2, bandY + 14);
-  label("みぎ ▶", CX + CX / 2, bandY + 14);
+  const names = ["ひだり", "まんなか", "みぎ"];
+  for (let i = 0; i < LANES; i++) {
+    label(names[i], (C.VIEW.w * (i + 0.5)) / LANES, bandY + 14);
+  }
   ctx.textAlign = "left";
   ctx.restore();
 }
@@ -339,6 +366,21 @@ function zoneGuide(ctx: CanvasRenderingContext2D, s: State): void {
  * 「何をやっているのかよくわからないまま終わった」への答え。
  * 説明を増やすのではなく、**そのとき何をすべきかを、その場に出す**。
  */
+/** いま居るレーンが塞がっているとき、どっちへ逃げればいいか。 */
+function away(s: State): string {
+  const free = [];
+  for (let i = 0; i < C.LANES; i++) {
+    if (i === s.lane) continue;
+    const blocked = s.poops.some((p) => !p.done && p.z > 0 && p.z < 200 && p.lane === i)
+      || s.deer.some((d) => !d.done && d.z > 0 && d.z < 260 && d.lane === i);
+    if (!blocked) free.push(i);
+  }
+  const to = free.length ? free.reduce((a, b) =>
+    Math.abs(a - s.lane) <= Math.abs(b - s.lane) ? a : b) : s.lane === 0 ? 1 : 0;
+  const name = ["ひだり", "まんなか", "みぎ"][to];
+  return to < s.lane ? `◀ ${name}へ` : `${name}へ ▶`;
+}
+
 function introPrompt(ctx: CanvasRenderingContext2D, s: State, atY: number): void {
   const v = C.speed(s.t);
   let best = Infinity;
@@ -354,11 +396,11 @@ function introPrompt(ctx: CanvasRenderingContext2D, s: State, atY: number): void
   for (const p of s.poops) {
     if (p.done || p.z <= 0) continue;
     if (p.big) consider(p.z / v, "▲ うえを さわって とぶ");
-    else if (p.lane === s.lane) consider(p.z / v, p.lane === 0 ? "▶ みぎへ" : "◀ ひだりへ");
+    else if (p.lane === s.lane) consider(p.z / v, away(s));
   }
   for (const d of s.deer) {
     if (d.done || d.z <= 0 || d.lane !== s.lane) continue;
-    consider(d.z / (v + C.DEER_SPEED), d.lane === 0 ? "▶ みぎへ" : "◀ ひだりへ");
+    consider(d.z / (v + C.DEER_SPEED), away(s));
   }
 
   // 何も来ていないときは、顔を上げて確かめることを教える

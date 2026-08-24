@@ -14,9 +14,9 @@ export type Phase = "menu" | "playing" | "over";
 export interface Poop {
   /** 自分の何px先か。0 で足元。 */
   z: number;
-  /** 0=左 1=右。`big` のときは両方をふさぐ。 */
+  /** 0=左 1=まんなか 2=右。`big` のときは全部をふさぐ。 */
   lane: number;
-  /** 両レーンをふさぐでかいの。よけられないので、とびこえる。 */
+  /** 全レーンをふさぐでかいの。よけようがないので、とびこえる。 */
   big: boolean;
   done: boolean;
 }
@@ -89,8 +89,14 @@ export interface State {
   runDirty: boolean;
   /** この汚れた区間の何段目にでかいフンを置くか。-1 なら置かない。 */
   bigAt: number;
-  /** 直前の段で汚れていたレーン。続けて同じ側にしないために覚えておく。 */
-  lastDirtyLane: number;
+  /**
+   * **通れる道のレーン。**段ごとに ±1 までしか動かさない。
+   *
+   * 塞ぐレーンを毎回でたらめに選ぶと、2段つづけて反対の端が空く、
+   * のような**間に合いようのない並び**が出る。先に道を1本引いておいて、
+   * 塞ぐのは「道以外」からだけにすれば、そういう並びは作れない。
+   */
+  pathLane: number;
 
   deerTimer: number;
   deerBlocked: number;
@@ -129,8 +135,8 @@ export function resetRun(s: State): void {
   // **ふだんは足元を見ている。**上の区画を触っているあいだだけ顔が上がる
   s.down = true;
   s.wasDown = true;
-  s.lane = 0;
-  s.lx = 0;
+  s.lane = 1;
+  s.lx = 1;
   s.split = C.SPLIT_DOWN;
   s.lastLook = -9;
   s.lastMove = -9;
@@ -160,7 +166,7 @@ export function resetRun(s: State): void {
   s.runLen = 0;
   s.runDirty = false;
   s.bigAt = -1;
-  s.lastDirtyLane = -1;
+  s.pathLane = 1;
   s.deerTimer = 4.2;
   s.deerBlocked = 0;
   s.senbeiTimer = 6;

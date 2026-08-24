@@ -249,15 +249,27 @@ function spawn(s: State, dt: number, vw: number): void {
         s.poops.push({ z: s.nextStepZ, lane: -1, big: true, done: false });
       } else if (s.bigAt < 0 || idx < s.bigAt - C.BIG_GAP) {
         /**
-         * **同じ側が続きすぎないようにする。**
-         * 乱数任せだと片側に3段4段と続き、そのあいだ指が動かないので
-         * 「左右によけている」感じが消える。半分は必ず反対側にする。
+         * **道を1本引いて、それ以外を塞ぐ。**
+         *
+         * 塞ぐレーンを毎段でたらめに選ぶと、2段つづけて反対の端だけが空く、
+         * のような**間に合いようのない並び**が出る。道は段ごとに ±1 しか
+         * 動かさないと決めておけば、隣へ1回動くだけで必ず通れる。
+         *
+         * 難しさは「道の見つけにくさ」で作る——2本塞げば道は1本だけになる。
          */
-        const lane = s.lastDirtyLane < 0 || Math.random() < 0.5
-          ? Math.floor(Math.random() * C.LANES)
-          : 1 - s.lastDirtyLane;
-        s.lastDirtyLane = lane;
-        s.poops.push({ z: s.nextStepZ, lane, big: false, done: false });
+        const drift = Math.random();
+        const move = drift < 0.28 ? -1 : drift < 0.56 ? 1 : 0;
+        s.pathLane = Math.min(C.LANES - 1, Math.max(0, s.pathLane + move));
+
+        const others = [];
+        for (let i = 0; i < C.LANES; i++) if (i !== s.pathLane) others.push(i);
+        // 2本塞ぐなら道は1本だけ。1本なら、どちらへ逃げてもいい
+        const blocked = Math.random() < C.blockTwo(s.t)
+          ? others
+          : [others[Math.floor(Math.random() * others.length)]];
+        for (const lane of blocked) {
+          s.poops.push({ z: s.nextStepZ, lane, big: false, done: false });
+        }
       }
       // bigAt の手前 BIG_GAP 段は空ける。ここが顔を上げる隙
     }
@@ -278,21 +290,26 @@ function spawn(s: State, dt: number, vw: number): void {
     } else {
       if (deliberate) s.clashSpawns++;
       s.deerBlocked = 0;
-      s.deer.push({
-        z: C.DEER_Z,
-        lane: Math.floor(Math.random() * C.LANES),
-        done: false,
-      });
+      /**
+       * **2頭ならんで来ることがある。**3レーンで1頭だけだと 2/3 が空いて
+       * しまい、顔を上げずに賭けても勝ててしまう。2頭なら、
+       * どこが空いているかを知らないかぎり通れない。
+       */
+      const lanes = [0, 1, 2];
+      for (let i = lanes.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [lanes[i], lanes[j]] = [lanes[j], lanes[i]];
+      }
+      const herd = Math.random() < C.deerPair(s.t) ? 2 : 1;
+      for (let i = 0; i < herd; i++) {
+        s.deer.push({ z: C.DEER_Z, lane: lanes[i], done: false });
+      }
       s.deerTimer = C.deerInterval(s.t) * (0.75 + Math.random() * 0.5) * introSlack;
     }
   }
 
   if (s.senbeiTimer <= 0) {
-    s.senbeis.push({
-      z: C.POOP_SEE,
-      lane: Math.floor(Math.random() * C.LANES),
-      taken: false,
-    });
+    s.senbeis.push({ z: C.POOP_SEE, lane: s.pathLane, taken: false });
     s.senbeiTimer = C.SENBEI_INTERVAL_MIN
       + Math.random() * (C.SENBEI_INTERVAL_MAX - C.SENBEI_INTERVAL_MIN);
   }

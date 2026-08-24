@@ -98,15 +98,23 @@ window.__bot = (spec) => new Promise((done) => {
     }
 
     const v = C.speed(s.t);
-    const h0 = hazard(0, v), h1 = hazard(1, v), hb = bigIn(v);
+    const hs = [];
+    for (let i = 0; i < C.LANES; i++) hs.push(Math.min(hazard(i, v), 99));
+    const hb = Math.min(bigIn(v), 99);
+    const maxH = Math.max(...hs), minH = Math.min(...hs);
+    const bestLane = hs.indexOf(maxH);
 
     /**
-     * **避けようのない場面**＝どちらのレーンも反応時間より短い間隔で塞がるとき、
-     * または、とばなければならないのと同時にレーンを移らされるとき。
-     * 当たった瞬間の直前にその場面が無ければ、それは理不尽な被弾。
+     * **避けようのない場面**は3つ。
+     *   ぜんぶのレーンが反応時間より短い間隔で塞がる（逃げ場が無い）
+     *   とばなければならないのと同時にレーンを移らされる
+     *   2本隣まで行かないと助からないのに、その時間が無い
+     * 当たった瞬間の直前にどれも無ければ、それは理不尽な被弾。
      */
-    if (isFinite(h0) && isFinite(h1) && Math.abs(h0 - h1) < C.T_MIN) lastForced = s.t;
-    if (isFinite(hb) && Math.abs(Math.min(h0, h1) - hb) < C.T_MIN) lastForced = s.t;
+    if (maxH < 99 && maxH - minH < C.T_MIN) lastForced = s.t;
+    if (hb < 99 && Math.abs(minH - hb) < C.T_MIN) lastForced = s.t;
+    if (maxH < 99 && Math.abs(bestLane - M.input.lane) >= 2
+      && maxH < 2 * C.LANE_TIME + 0.1) lastForced = s.t;
     const now = s.poopHits + s.deerHits;
     if (now > hits) {
       hits = now;
@@ -119,7 +127,16 @@ window.__bot = (spec) => new Promise((done) => {
     else {
       // でかいのが来る直前だけ、上の区画を触る（＝顔を上げてとぶ）
       if (hb < 0.40) down = false;
-      else { down = true; lane = h0 > h1 ? 0 : 1; }
+      else {
+        down = true;
+        // いちばん長く空いているレーンへ。同じ長さなら、いま近いほう
+        lane = bestLane;
+        for (let i = 0; i < C.LANES; i++) {
+          if (hs[i] >= maxH - 1e-6 && Math.abs(i - M.input.lane) < Math.abs(lane - M.input.lane)) {
+            lane = i;
+          }
+        }
+      }
     }
 
     if (wasDown !== null && down !== wasDown) seen.toggles++;
@@ -201,10 +218,9 @@ const touch = await page.evaluate(async () => {
     height: Math.round(r.height),
     upTop: at(6, r.top + 20),
     upNear: at(r.left + r.width - 6, band - 10),
-    leftHi: at(6, band + 10),
-    leftLo: at(r.width / 2 - 6, r.top + r.height - 6),
-    rightHi: at(r.width / 2 + 6, band + 10),
-    rightLo: at(r.width - 6, r.top + r.height - 6),
+    // 下の帯を3等分。それぞれ「区切りのすぐ下」と「いちばん下」で同じか
+    zonesHi: [0, 1, 2].map((i) => at(r.width * (i + 0.15) / 3, band + 10).lane),
+    zonesLo: [0, 1, 2].map((i) => at(r.width * (i + 0.85) / 3, r.top + r.height - 6).lane),
     idle: { up: M.input.up, lane: M.input.lane },
   };
 });
@@ -221,15 +237,17 @@ check("顔を上げているあいだ、レーンは動かない",
  * **下の左半分ならどこでも同じ。右半分も同じ。**
  * 区画は 390×338 と 195×506 の3つ。「あと3px 左にいれば」は起きようがない。
  */
-check("下の左半分は、上でも下でも端でも同じ",
-  touch.leftHi.lane === 0 && touch.leftLo.lane === 0 && touch.leftHi.up === false,
-  `区切り ${touch.band}px / 画面 ${touch.height}px`);
-check("下の右半分は、上でも下でも端でも同じ",
-  touch.rightHi.lane === 1 && touch.rightLo.lane === 1);
-const bandInfo = await page.evaluate(() => window.__mtd.laneBand);
-check("いちばん小さい的でも画面の3割以上ある",
-  bandInfo >= 0.4 && bandInfo <= 0.75 && (1 - bandInfo) >= 0.25,
-  `下の帯 ${(bandInfo * 100).toFixed(0)}% ／ 左右はその半分ずつ`);
+check("下の3等分が、そのまま3つのレーンになっている",
+  touch.zonesHi.join() === "0,1,2" && touch.zonesLo.join() === "0,1,2",
+  `上寄り ${touch.zonesHi.join("/")} ／ 下寄り ${touch.zonesLo.join("/")} ／ 区切り ${touch.band}px`);
+const bandInfo = await page.evaluate(() => ({
+  band: window.__mtd.laneBand, lanes: window.__mtd.config.LANES,
+}));
+/** いちばん小さい的でも、画面の1/6以上。130×506px ある。 */
+const smallest = (bandInfo.band / bandInfo.lanes);
+check("いちばん小さい的でも画面の1割以上ある",
+  smallest > 0.1 && 1 - bandInfo.band >= 0.25,
+  `下の帯 ${(bandInfo.band * 100).toFixed(0)}% を ${bandInfo.lanes}等分`);
 /** 操作が「区画」だけで決まっていること。押した長さや速さは読んでいない。 */
 check("押した長さや速さは読んでいない",
   !/setTimeout|performance\.now|Date\.now/.test(inputSrc));
@@ -266,12 +284,25 @@ const hidden = await page.evaluate(async () => {
   const DEER = [0xa8, 0x7a, 0x4a];   // 鹿の胴
   const POOP = [0x3d, 0x2b, 0x1f];   // フンの本体
 
+  // **待っているあいだに鹿は近づいてくる。**測る直前に置き直さないと、
+  // 「奥に居るはずの鹿」が視界の端まで来てしまっていて、測り違える。
+  const put = async (z, lane) => {
+    s.deer = [{ z, lane, done: false }];
+    await wait(3);
+    s.deer[0].z = z;
+    await wait(1);
+  };
   M.input.up = true;
-  await wait(30);
+  await wait(20);
+  await put(300, 1);
   const deerUp = count(DEER, 22);
   M.input.up = false;
-  await wait(40);
+  await wait(20);
+  await put(300, 1);
   const deerDown = count(DEER, 22);
+  // **目の前まで来た鹿は、下を向いていても視界の端に入る。**
+  await put(C.peripheralZ(s.t) * 0.6, 1);
+  const deerNear = count(DEER, 22);
 
   // フンだけにして、同じことを逆向きに見る
   s.deer = [];
@@ -283,10 +314,18 @@ const hidden = await page.evaluate(async () => {
   M.input.up = true;
   await wait(40);
   const poopUp = count(POOP, 10);
-  return { deerUp, deerDown, poopDown, poopUp };
+  return { deerUp, deerDown, deerNear, poopDown, poopUp };
 });
 check("前を見ていれば鹿が見える", hidden.deerUp > 30, `鹿の色 ${hidden.deerUp} 画素`);
-check("下を向いているあいだ鹿は見えない", hidden.deerDown === 0, `鹿の色 ${hidden.deerDown} 画素`);
+check("下を向いているあいだ、奥の鹿は見えない", hidden.deerDown === 0,
+  `鹿の色 ${hidden.deerDown} 画素`);
+/**
+ * **通り過ぎたかどうかは分かってほしい。**
+ * 完全に消していたら「上で見た鹿を通り過ぎたのか分からない」と言われた。
+ * うつむいて歩いていても、足のすぐ前のものは視界の端に入る。
+ */
+check("下を向いていても、目の前まで来た鹿は見える", hidden.deerNear > 20,
+  `鹿の色 ${hidden.deerNear} 画素`);
 check("下を向いていればフンが見える", hidden.poopDown > 20, `フンの色 ${hidden.poopDown} 画素`);
 check("前を見ているあいだ足元は見えない", hidden.poopUp === 0, `フンの色 ${hidden.poopUp} 画素`);
 
@@ -338,6 +377,18 @@ check("フンは、見えてから届くまで反応時間より長い", lead.po
   `${lead.poop.toFixed(2)}秒（反応時間の下限 0.45秒）`);
 check("鹿は、出てから届くまで反応時間より長い", lead.deer > 0.45 + 0.25,
   `${lead.deer.toFixed(2)}秒`);
+/**
+ * **視界の端に入るのは「知らせ」であって「予告」ではない。**
+ * ここが反応時間より長いと、下を向いたままでも避けられてしまい、
+ * 顔を上げる理由が消える。短すぎると、通り過ぎたことに気づけない。
+ */
+const peripheral = await page.evaluate(() => {
+  const C = window.__mtd.config;
+  return { t: C.PERIPHERAL_TIME, react: C.T_MIN, move: C.LANE_TIME };
+});
+check("目の前で見えても、そこから避けるには間に合わない",
+  peripheral.t > 0.2 && peripheral.t < peripheral.react,
+  `見えてから ${peripheral.t.toFixed(2)}秒（反応 ${peripheral.react}秒 ＋ 移る ${peripheral.move}秒）`);
 
 /**
  * **フンは横の px を持たない。レーン番号だけ。**
@@ -363,6 +414,63 @@ const move = await page.evaluate(() => {
 });
 check("次の段が来るまでに、レーンを移りきれる", move.worst > move.lane * 1.5,
   `段の間隔 ${move.worst.toFixed(2)}秒 ／ 移るのに ${move.lane.toFixed(2)}秒`);
+
+/**
+ * **道は段ごとに隣までしか動かない。**
+ *
+ * 塞ぐレーンを毎段でたらめに選ぶと、2段つづけて反対の端だけが空く、
+ * のような**間に合いようのない並び**が出る。先に道を1本引いておいて
+ * 「道以外」から塞ぐようにしてあるので、隣へ1回動けば必ず通れるはず。
+ * 実際に作らせて、並びを見る。
+ */
+const path = await page.evaluate(() => new Promise((done) => {
+  const M = window.__mtd, s = M.state, C = M.config;
+  s.intro = 0;
+  s.t = 90;
+  let worst = 0, pairs = 0, allBlocked = 0, frames = 0;
+  const t0 = performance.now();
+  const tick = () => {
+    s.dirt = 0;
+    s.trip = 0;
+    s.phase = "playing";
+    M.input.up = false;
+    /**
+     * **そのときの並びをまるごと見る。**
+     * フンは流れているので、置かれた距離で覚えようとすると
+     * 毎フレーム別の段として数えてしまう。同じ段のフンは z が完全に等しい
+     * （同じ値で置かれ、同じだけ引かれる）ので、いまの z でまとめればいい。
+     */
+    if (frames++ % 20 === 0) {
+      const rows = new Map();
+      for (const p of s.poops) {
+        if (p.big || p.z <= 0) continue;
+        if (!rows.has(p.z)) rows.set(p.z, new Set());
+        rows.get(p.z).add(p.lane);
+      }
+      const zs = [...rows.keys()].sort((a, b) => a - b);
+      const free = (z) => {
+        const out = [];
+        for (let l = 0; l < C.LANES; l++) if (!rows.get(z).has(l)) out.push(l);
+        return out;
+      };
+      for (let i = 0; i + 1 < zs.length; i++) {
+        const a = free(zs[i]), b = free(zs[i + 1]);
+        if (!a.length || !b.length) { allBlocked++; continue; }
+        if (zs[i + 1] - zs[i] > C.STEP_Z * 1.5) continue;   // 間にきれいな段がある
+        pairs++;
+        let best = 9;
+        for (const x of a) for (const y of b) best = Math.min(best, Math.abs(x - y));
+        worst = Math.max(worst, best);
+      }
+    }
+    if (performance.now() - t0 < 12000) requestAnimationFrame(tick);
+    else done({ worst, pairs, allBlocked });
+  };
+  requestAnimationFrame(tick);
+}));
+check("となりの段へは、1本ずつ動けば必ず通れる",
+  path.pairs >= 20 && path.worst <= 1 && path.allBlocked === 0,
+  `いちばん離れて ${path.worst} 本 / 続けて置かれた段 ${path.pairs} 組 / 全部塞がった段 ${path.allBlocked}`);
 
 // **教える時間（intro）を飛ばして、本番の濃さで見る。**
 const skipIntro = async (t) => {

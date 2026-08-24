@@ -1,9 +1,8 @@
 /**
- * 操作。**画面を3つの区画に分ける。**
+ * 操作。**画面を4つの区画に分ける。**
  *
  *   上のほう      → 顔を上げる（前が見える／足元は見えない／レーンは動かない）
- *   下の左半分    → 左のレーンへ歩く（足元が見える）
- *   下の右半分    → 右のレーンへ歩く（足元が見える）
+ *   下を横に3等分 → 触ったところのレーンへ歩く（足元が見える）
  *   どこも触らない → 足元を見たまま、いまのレーンで歩く
  *
  * **前の版は「触っている＝下を見る」だった。これが壊れていた。**
@@ -12,8 +11,8 @@
  * **よけようとすると顔が上がってしまう**。ひとつの指の上下1ビットに
  * ふたつの意味を載せたのが間違いだった。区画で分ければ喧嘩しない。
  *
- * 座標は読むが、**的は画面の4割と、その下の左右半分**。
- * 195×506px と 390×338px の的が3つあるだけで、
+ * 座標は読むが、**的は画面の4割と、その下の3等分**。
+ * 390×338px と 130×506px の的が4つあるだけで、
  * 「あと3px 左にいれば助かった」は起きようがない。
  *
  * 上を触るのに指を伸ばすのは、そのまま「顔を上げる」という動作の重さになる。
@@ -22,11 +21,13 @@
 
 /** 下の区画（レーン）の高さ。画面の下から数えた割合。 */
 export const LANE_BAND = 0.60;
+/** レーンの数。下の帯をこの数で横に等分する。 */
+export const LANES = 3;
 
 export interface InputState {
   /** 顔を上げているか。上の区画を触っているあいだだけ true。 */
   up: boolean;
-  /** いま向かっているレーン（0=左 1=右）。触っていなくても残る。 */
+  /** いま向かっているレーン（0=左 1=まんなか 2=右）。触っていなくても残る。 */
   lane: number;
   /** 顔を上げた回数。検証用。 */
   toggles: number;
@@ -41,17 +42,21 @@ export interface InputOptions {
   onPress?: () => void;
 }
 
-type Zone = "up" | "left" | "right";
+type Zone = "up" | number;
 
 export function attachInput(el: HTMLElement, opts: InputOptions): InputState {
-  const st: InputState = { up: false, lane: 0, toggles: 0, moves: 0 };
+  const st: InputState = { up: false, lane: 1, toggles: 0, moves: 0 };
   let firstDone = false;
 
-  /** 触った場所を3つの区画のどれかに落とす。**ここでしか座標を使わない。** */
+  /**
+   * 触った場所を区画に落とす。**ここでしか座標を使わない。**
+   * 上の帯なら "up"、下の帯なら**横を等分**してレーン番号。
+   */
   const zoneOf = (clientX: number, clientY: number): Zone => {
     const r = el.getBoundingClientRect();
     if (clientY < r.top + r.height * (1 - LANE_BAND)) return "up";
-    return clientX < r.left + r.width / 2 ? "left" : "right";
+    const f = (clientX - r.left) / r.width;
+    return Math.min(LANES - 1, Math.max(0, Math.floor(f * LANES)));
   };
 
   const apply = (zone: Zone): void => {
@@ -61,9 +66,8 @@ export function attachInput(el: HTMLElement, opts: InputOptions): InputState {
       return;                       // 顔を上げているあいだ、レーンは動かない
     }
     st.up = false;
-    const lane = zone === "left" ? 0 : 1;
-    if (st.lane !== lane) {
-      st.lane = lane;
+    if (st.lane !== zone) {
+      st.lane = zone;
       st.moves++;
     }
   };
@@ -106,8 +110,11 @@ export function attachInput(el: HTMLElement, opts: InputOptions): InputState {
       return;
     }
     release();
-    if (keys.has("ArrowLeft") || keys.has("KeyA")) apply("left");
-    else if (keys.has("ArrowRight") || keys.has("KeyD")) apply("right");
+    // ← → は「1本ずつ移る」。押しっぱなしで端まで行く
+    if (keys.has("ArrowLeft") || keys.has("KeyA")) apply(Math.max(0, st.lane - 1));
+    else if (keys.has("ArrowRight") || keys.has("KeyD")) {
+      apply(Math.min(LANES - 1, st.lane + 1));
+    }
   };
   const WATCHED = ["ArrowLeft", "ArrowRight", "ArrowUp", "Space", "KeyA", "KeyD", "KeyW"];
   window.addEventListener("keydown", (e) => {
