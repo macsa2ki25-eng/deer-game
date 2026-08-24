@@ -14,6 +14,7 @@
 import * as C from "./config";
 import type { State } from "./state";
 import { HUD, SPR, pick, type Sprite } from "./sprites";
+import { LANE_BAND } from "./input";
 
 const CX = C.VIEW.w / 2;
 /** 足元での参道の半幅。 */
@@ -267,9 +268,14 @@ export function render(ctx: CanvasRenderingContext2D, s: State): void {
   shadow(ctx, kx, C.KID_Y + 1, jumping ? 10 : 14);
   drawSprite(ctx, kid, kx, C.KID_Y + bob - (jumping ? 6 : 0));
 
+  gazeMark(ctx, s, by);
   drawHud(ctx, s);
 
-  if (s.intro > 0 && s.phase === "playing") introPrompt(ctx, s, by);
+  if (s.intro > 0 && s.phase === "playing") {
+    zoneGuide(ctx, s);
+    // 区画の案内と場所を取り合わないよう、指示は子どものすぐ上に出す
+    introPrompt(ctx, s, C.KID_Y - 48);
+  }
 
   if (s.bannerT > 0 && s.banner) {
     ctx.fillStyle = "rgba(17,20,14,.75)";
@@ -283,12 +289,57 @@ export function render(ctx: CanvasRenderingContext2D, s: State): void {
 }
 
 /**
+ * いまどっちを見ているかの印。**姿勢だけに頼らない。**
+ * 暗幕の境目に、見ている向きへ小さく三角を出す。
+ */
+function gazeMark(ctx: CanvasRenderingContext2D, s: State, by: number): void {
+  const y = s.down ? by + 4 : by - 5;
+  const d = s.down ? 1 : -1;
+  ctx.fillStyle = "rgba(230,192,106,.9)";
+  for (let i = 0; i < 4; i++) {
+    ctx.fillRect(C.VIEW.w - 12 + i, y + d * i, 8 - i * 2, 1);
+  }
+}
+
+/**
+ * **区画の案内。**教えているあいだだけ、どこを触ると何が起きるかを画面に置く。
+ * 説明文を読ませるより、触る場所そのものに書いてあるほうが早い。
+ */
+function zoneGuide(ctx: CanvasRenderingContext2D, s: State): void {
+  const fade = Math.min(1, s.intro / 2.5);
+  const bandY = Math.round(C.VIEW.h * (1 - LANE_BAND));
+  ctx.save();
+  ctx.globalAlpha = fade;
+
+  // 区切り線
+  ctx.fillStyle = "rgba(230,192,106,.35)";
+  for (let x = 0; x < C.VIEW.w; x += 4) ctx.fillRect(x, bandY, 2, 1);
+  for (let y = bandY; y < C.VIEW.h; y += 4) ctx.fillRect(CX - 1, y, 1, 2);
+
+  // 地面の上に直接書くと読めないので、下敷きを敷く
+  ctx.font = "7px monospace";
+  ctx.textAlign = "center";
+  const label = (str: string, x: number, y: number): void => {
+    const w = ctx.measureText(str).width + 8;
+    ctx.fillStyle = "rgba(17,20,14,.72)";
+    ctx.fillRect(Math.round(x - w / 2), y - 7, Math.round(w), 10);
+    ctx.fillStyle = "rgba(230,192,106,.9)";
+    ctx.fillText(str, x, y);
+  };
+  label("ここを さわると まえを みる", CX, bandY - 4);
+  label("◀ ひだり", CX / 2, bandY + 14);
+  label("みぎ ▶", CX + CX / 2, bandY + 14);
+  ctx.textAlign = "left";
+  ctx.restore();
+}
+
+/**
  * 教えているあいだの合図。
  *
  * 「何をやっているのかよくわからないまま終わった」への答え。
  * 説明を増やすのではなく、**そのとき何をすべきかを、その場に出す**。
  */
-function introPrompt(ctx: CanvasRenderingContext2D, s: State, by: number): void {
+function introPrompt(ctx: CanvasRenderingContext2D, s: State, atY: number): void {
   const v = C.speed(s.t);
   let best = Infinity;
   let msg = "";
@@ -302,7 +353,7 @@ function introPrompt(ctx: CanvasRenderingContext2D, s: State, by: number): void 
 
   for (const p of s.poops) {
     if (p.done || p.z <= 0) continue;
-    if (p.big) consider(p.z / v, "▲ はなして とぶ");
+    if (p.big) consider(p.z / v, "▲ うえを さわって とぶ");
     else if (p.lane === s.lane) consider(p.z / v, p.lane === 0 ? "▶ みぎへ" : "◀ ひだりへ");
   }
   for (const d of s.deer) {
@@ -313,15 +364,15 @@ function introPrompt(ctx: CanvasRenderingContext2D, s: State, by: number): void 
   // 何も来ていないときは、顔を上げて確かめることを教える
   if (best > 1.5) {
     if (!s.down) return;
-    msg = "▲ はなすと 前が見える";
+    msg = "▲ うえを さわると 前が見える";
   }
 
   ctx.font = "bold 10px monospace";
   ctx.textAlign = "center";
   const w = ctx.measureText(msg).width + 12;
-  ctx.fillStyle = "rgba(17,20,14,.72)";
-  ctx.fillRect(CX - w / 2, by - 26, w, 15);
+  ctx.fillStyle = "rgba(17,20,14,.8)";
+  ctx.fillRect(CX - w / 2, atY - 11, w, 15);
   ctx.fillStyle = "#e6c06a";
-  ctx.fillText(msg, CX, by - 15);
+  ctx.fillText(msg, CX, atY);
   ctx.textAlign = "left";
 }

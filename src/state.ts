@@ -126,11 +126,12 @@ export function resetRun(s: State): void {
   s.dist = 0;
   s.score = 0;
   s.dirt = 0;
-  s.down = false;
-  s.wasDown = false;
+  // **ふだんは足元を見ている。**上の区画を触っているあいだだけ顔が上がる
+  s.down = true;
+  s.wasDown = true;
   s.lane = 0;
   s.lx = 0;
-  s.split = C.SPLIT_UP;
+  s.split = C.SPLIT_DOWN;
   s.lastLook = -9;
   s.lastMove = -9;
   s.trip = 0;

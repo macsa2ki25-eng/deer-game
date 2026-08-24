@@ -2,7 +2,7 @@
 
 import * as C from "./config";
 import { createState, resetRun, type State } from "./state";
-import { attachInput } from "./input";
+import { attachInput, LANE_BAND } from "./input";
 import { step } from "./game";
 import { render } from "./render";
 import { unlock, setEnabled } from "./audio";
@@ -88,14 +88,15 @@ function frame(now: number): void {
   last = now;
   if (dt > 0.25) dt = 0.25; // タブ復帰などで一気に進めない
 
-  // 指の状態がそのまま視線とレーン。ゲームが読む操作はこれだけ。
-  state.down = input.down;
-  // **レーンは触れているあいだだけ動く。**離しているあいだ（＝前を見ている
-  // あいだ）に横へ動けると、足元を見ずに避けられてしまう。
-  if (input.down) {
-    if (state.lane !== input.lane) state.lastMove = state.t;
-    state.lane = input.lane;
-  }
+  /**
+   * 指の状態がそのまま視線とレーン。
+   * **上の区画を触っているあいだだけ顔が上がる**。それ以外は足元を見ている。
+   * 顔を上げているあいだ input.lane は動かないので、
+   * 「前を見ながら横に逃げる」は起こらない。
+   */
+  state.down = !input.up;
+  if (state.lane !== input.lane) state.lastMove = state.t;
+  state.lane = input.lane;
 
   acc += dt;
   let guard = 0;
@@ -116,7 +117,7 @@ function frame(now: number): void {
 // ?debug=1 で内部状態を覗けるようにする。検証がここを使う。
 if (new URLSearchParams(location.search).has("debug")) {
   (window as Window & { __mtd?: unknown }).__mtd = {
-    state, config: C, input, start: startRun,
+    state, config: C, input, start: startRun, laneBand: LANE_BAND,
   };
 }
 

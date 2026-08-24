@@ -40,7 +40,15 @@ const js = readFileSync(resolve(DIST, src.replace(/^\.?\//, "")), "utf8");
 
 // </script> がJSの中に出てきたら、HTMLパーサがそこでスクリプトを閉じてしまう。
 const safeJs = js.replace(/<\/script/gi, "<\\/script");
-html = html.replace(tag, `<script type="module">${safeJs}</script>`);
+/**
+ * **差し込みは関数で返す。**
+ *
+ * `replace(tag, text)` の text の中の `$&` `$\`` `$\'` は置換の特殊記号として
+ * 解釈される。バンドルされたJSにたまたま `$&` が入っていると、
+ * そこに**元のタグごと**差し戻されて `src="/assets/..."` が復活する。
+ * 実際それで畳めなくなった。関数を渡せば特殊解釈は起きない。
+ */
+html = html.replace(tag, () => `<script type="module">${safeJs}</script>`);
 
 if (/\bsrc="\.?\/assets\//.test(html)) {
   console.error("assets/ への参照が残っています。畳みきれていません。");

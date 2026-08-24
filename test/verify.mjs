@@ -117,7 +117,7 @@ window.__bot = (spec) => new Promise((done) => {
     if (spec.play === "left") { down = true; lane = 0; }
     else if (spec.play === "up") { down = false; }
     else {
-      // でかいのが来る直前は手を離す（＝顔を上げてとぶ）
+      // でかいのが来る直前だけ、上の区画を触る（＝顔を上げてとぶ）
       if (hb < 0.40) down = false;
       else { down = true; lane = h0 > h1 ? 0 : 1; }
     }
@@ -125,8 +125,9 @@ window.__bot = (spec) => new Promise((done) => {
     if (wasDown !== null && down !== wasDown) seen.toggles++;
     if (wasLane !== null && lane !== wasLane) seen.moves++;
     wasDown = down; wasLane = lane;
-    M.input.down = down;
-    M.input.lane = lane;
+    // 上の区画を触っているあいだはレーンが動かない、という約束もここで守る
+    M.input.up = !down;
+    if (down) M.input.lane = lane;
 
     requestAnimationFrame(tick);
   };
@@ -179,36 +180,59 @@ section("操作");
  * それだけ**。的は幅195pxが2つ。ここが崩れると「あと3px」が戻ってくる。
  */
 const inputSrc = await readFile(resolve(DIST, "../src/input.ts"), "utf8");
-check("縦の位置は読んでいない", !/clientY|offsetY|\.top\b/.test(inputSrc));
 
 await start();
 const touch = await page.evaluate(async () => {
   const M = window.__mtd;
   const el = document.getElementById("stage");
+  const r = el.getBoundingClientRect();
   const send = (type, x, y) => el.dispatchEvent(new PointerEvent(type, {
     pointerId: 1, bubbles: true, clientX: x, clientY: y,
   }));
   const at = (x, y) => {
     send("pointerdown", x, y);
-    const r = { down: M.input.down, lane: M.input.lane };
+    const got = { up: M.input.up, lane: M.input.lane };
     send("pointerup", x, y);
-    return r;
+    return got;
   };
+  const band = r.top + r.height * (1 - M.laneBand);
   return {
-    farLeftTop: at(4, 40), nearLeftBottom: at(190, 820),
-    nearRightTop: at(200, 40), farRightBottom: at(386, 820),
-    released: M.input.down,
+    band: Math.round(band),
+    height: Math.round(r.height),
+    upTop: at(6, r.top + 20),
+    upNear: at(r.left + r.width - 6, band - 10),
+    leftHi: at(6, band + 10),
+    leftLo: at(r.width / 2 - 6, r.top + r.height - 6),
+    rightHi: at(r.width / 2 + 6, band + 10),
+    rightLo: at(r.width - 6, r.top + r.height - 6),
+    idle: { up: M.input.up, lane: M.input.lane },
   };
 });
-check("触ると下を見る", touch.farLeftTop.down === true);
-check("離すと前を見る", touch.released === false);
-/** **左半分ならどこを触っても同じ。右半分も同じ。** */
-check("左半分は、上でも下でも端でも同じ",
-  touch.farLeftTop.lane === 0 && touch.nearLeftBottom.lane === 0,
-  `x=4,y=40 → ${touch.farLeftTop.lane} ／ x=190,y=820 → ${touch.nearLeftBottom.lane}`);
-check("右半分は、上でも下でも端でも同じ",
-  touch.nearRightTop.lane === 1 && touch.farRightBottom.lane === 1,
-  `x=200,y=40 → ${touch.nearRightTop.lane} ／ x=386,y=820 → ${touch.farRightBottom.lane}`);
+check("上のほうを触ると顔が上がる", touch.upTop.up === true && touch.upNear.up === true);
+check("手を離すと足元に戻る", touch.idle.up === false);
+/**
+ * **上を触っているあいだ、レーンは動かない。**
+ * ここが動くと「前を見ながら横に逃げる」ができてしまい、
+ * 見るのと動くのを別の時間にした意味が消える。
+ */
+check("顔を上げているあいだ、レーンは動かない",
+  touch.upTop.lane === touch.upNear.lane);
+/**
+ * **下の左半分ならどこでも同じ。右半分も同じ。**
+ * 区画は 390×338 と 195×506 の3つ。「あと3px 左にいれば」は起きようがない。
+ */
+check("下の左半分は、上でも下でも端でも同じ",
+  touch.leftHi.lane === 0 && touch.leftLo.lane === 0 && touch.leftHi.up === false,
+  `区切り ${touch.band}px / 画面 ${touch.height}px`);
+check("下の右半分は、上でも下でも端でも同じ",
+  touch.rightHi.lane === 1 && touch.rightLo.lane === 1);
+const bandInfo = await page.evaluate(() => window.__mtd.laneBand);
+check("いちばん小さい的でも画面の3割以上ある",
+  bandInfo >= 0.4 && bandInfo <= 0.75 && (1 - bandInfo) >= 0.25,
+  `下の帯 ${(bandInfo * 100).toFixed(0)}% ／ 左右はその半分ずつ`);
+/** 操作が「区画」だけで決まっていること。押した長さや速さは読んでいない。 */
+check("押した長さや速さは読んでいない",
+  !/setTimeout|performance\.now|Date\.now/.test(inputSrc));
 
 // ---- いちばん守りたいこと ----
 section("どっちも同時には見られない");
@@ -242,10 +266,10 @@ const hidden = await page.evaluate(async () => {
   const DEER = [0xa8, 0x7a, 0x4a];   // 鹿の胴
   const POOP = [0x3d, 0x2b, 0x1f];   // フンの本体
 
-  M.input.down = false;
+  M.input.up = true;
   await wait(30);
   const deerUp = count(DEER, 22);
-  M.input.down = true;
+  M.input.up = false;
   await wait(40);
   const deerDown = count(DEER, 22);
 
@@ -253,10 +277,10 @@ const hidden = await page.evaluate(async () => {
   s.deer = [];
   s.poops = [{ z: 150, lane: 0, big: false, done: false },
              { z: 210, lane: 1, big: false, done: false }];
-  M.input.down = true;
+  M.input.up = false;
   await wait(30);
   const poopDown = count(POOP, 10);
-  M.input.down = false;
+  M.input.up = true;
   await wait(40);
   const poopUp = count(POOP, 10);
   return { deerUp, deerDown, poopDown, poopUp };
@@ -400,7 +424,7 @@ const bigRule = await page.evaluate(async () => {
     s.deer = [];
     s.jumps = 0;
     s.jumpMiss = 0;
-    M.input.down = down;
+    M.input.up = !down;
     await wait(70);
     return { jumps: s.jumps, miss: s.jumpMiss };
   };
@@ -435,7 +459,7 @@ const gap = await page.evaluate(() => new Promise((done) => {
     s.dirt = 0;
     s.trip = 0;
     s.phase = "playing";
-    M.input.down = true;
+    M.input.up = false;
     // **出てきた瞬間に測る。**同じ区間の小さいフンは、もう手前に並んでいる
     for (const b of s.poops) {
       if (!b.big || measured.has(b)) continue;
@@ -476,7 +500,7 @@ const grazed = await page.evaluate(async () => {
   s.nices = 0;
   s.lane = 0;
   s.lx = 0;
-  M.input.down = true;
+  M.input.up = false;
   M.input.lane = 0;
   await wait(4);
   M.input.lane = 1;                 // いま移った
