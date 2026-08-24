@@ -88,8 +88,14 @@ function frame(now: number): void {
   last = now;
   if (dt > 0.25) dt = 0.25; // タブ復帰などで一気に進めない
 
-  // 指の状態がそのまま視線。ゲームが読む操作はこれだけ。
+  // 指の状態がそのまま視線とレーン。ゲームが読む操作はこれだけ。
   state.down = input.down;
+  // **レーンは触れているあいだだけ動く。**離しているあいだ（＝前を見ている
+  // あいだ）に横へ動けると、足元を見ずに避けられてしまう。
+  if (input.down) {
+    if (state.lane !== input.lane) state.lastMove = state.t;
+    state.lane = input.lane;
+  }
 
   acc += dt;
   let guard = 0;

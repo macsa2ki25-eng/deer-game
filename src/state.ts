@@ -4,45 +4,48 @@ import * as C from "./config";
 
 export type Phase = "menu" | "playing" | "over";
 
-/** 足元に落ちているもの。 */
+/**
+ * 参道に落ちているもの。
+ *
+ * **横の位置はレーン番号しか持たない。**px で持たせると、そこに必ず
+ * 「あと3px 左にいれば助かった」が生まれる。当たるかどうかは
+ * 「同じレーンに居たか」だけで決まってほしい。
+ */
 export interface Poop {
-  x: number;
-  /**
-   * **縦位置は持たない。**
-   *
-   * 一度は帯いっぱいに散らした。画面が埋まるし当たりには効かないから
-   * 安全だ、という作り手の理屈だったが、遊ぶ側から見ると
-   * **「足と関係ない場所にあるフンを避けている」**だけだった。
-   * フンは靴と同じ線を通る。それでこそ「跨ぐ」が成立する。
-   */
+  /** 自分の何px先か。0 で足元。 */
+  z: number;
+  /** 0=左 1=右。`big` のときは両方をふさぐ。 */
+  lane: number;
+  /** 両レーンをふさぐでかいの。よけられないので、とびこえる。 */
   big: boolean;
-  /** 跨いだ／踏んだの判定を1回だけにする。 */
   done: boolean;
 }
 
-/** 前から来る鹿。 */
+/** 奥から歩いてくる鹿。 */
 export interface Deer {
-  x: number;
-  frame: number;
+  z: number;
+  lane: number;
   done: boolean;
 }
 
 /** 拾えるもの。 */
 export interface Senbei {
-  x: number;
+  z: number;
+  lane: number;
   taken: boolean;
 }
 
-/** 前方の帯を流れる飾り。当たらない。 */
+/** 参道の脇を流れる飾り。当たらない。 */
 export interface Scenery {
-  x: number;
-  kind: "tree" | "treeFar" | "lantern";
+  z: number;
+  /** -1=左の脇 1=右の脇 */
+  side: number;
+  kind: "tree" | "lantern";
 }
 
 export interface State {
   phase: Phase;
 
-  /** 走った時間[s]。難易度はこれで決まる。 */
   t: number;
   /** 走った距離[px]。スコアの素。 */
   dist: number;
@@ -50,31 +53,27 @@ export interface State {
   dirt: number;
 
   /**
-   * 下を見ているか。**指が押されているあいだ true。**
-   * 遊びの全部がこの1ビットに集約されている。
+   * 下を見ているか。**指が触れているあいだ true。**
+   * 触っているあいだは足元が見え、鹿は見えない。
    */
   down: boolean;
-  /** 仕切りの位置（0〜1）。down に向かって滑らかに動く。 */
+  /** いま居るレーン（整数）。当たり判定はこれだけを見る。 */
+  lane: number;
+  /** 見た目の横位置（0〜LANES-1 のあいだを滑る）。当たりには使わない。 */
+  lx: number;
+  /** 見えている範囲の境目（0=地平 1=足元）。down に向かって滑らかに動く。 */
   split: number;
-  /** 視線を切り替えた時刻。すれすれボーナスの判定に使う。 */
+  /** 視線を切り替えた時刻／レーンを移った時刻。すれすれ判定に使う。 */
   lastLook: number;
-  /**
-   * 前のフレームの視線。切り替わった瞬間を拾うためだけに持つ。
-   * **`down` はゲームの外（指）から書かれる**ので、
-   * 切り替わりはここで自分で見つけるしかない。
-   */
+  lastMove: number;
+  /** 前のフレームの視線。切り替わった瞬間を拾うためだけに持つ。 */
   wasDown: boolean;
 
   /** 転んでいる残り時間[s]。0 なら走っている。 */
   trip: number;
-  /** 跨いだ足を出している残り時間[s]。 */
-  stepping: number;
-  /**
-   * **とんでいる残り時間[s]。大きいフンを越えた瞬間に立つ。**
-   * 絵のためだけの値。跳べたかどうかは、そのとき前を見ていたかで決まる。
-   */
+  /** とんでいる残り時間[s]。 */
   hop: number;
-  /** 走りのコマ送り。 */
+  /** 歩きのコマ送り。 */
   walkAcc: number;
 
   poops: Poop[];
@@ -82,30 +81,22 @@ export interface State {
   senbeis: Senbei[];
   scenery: Scenery[];
 
-  /**
-   * 次の石を置く距離[px]。石は等間隔に流れてくる。
-   * フンは「汚れた区間」としてまとめて置くので、残りマス数を持つ。
-   */
-  nextStoneAt: number;
-  /** いま置いている区間の残りマス数と、それが汚れているか。 */
+  /** 次の段を置く距離[px先]。 */
+  nextStepZ: number;
+  /** いま置いている区間の残り段数／全段数／汚れているか。 */
   runLeft: number;
-  runDirty: boolean;
-  /** いまの区間のマス数（何マス目かを数えるのに使う）。 */
   runLen: number;
-  /**
-   * この汚れた区間の何マス目に大きいフンを置くか。-1 なら置かない。
-   * **手前 BIG_GAP マスは空ける**——顔を上げるための隙で、
-   * 空いたマスの並びがそのまま「来るぞ」の合図になる。
-   */
+  runDirty: boolean;
+  /** この汚れた区間の何段目にでかいフンを置くか。-1 なら置かない。 */
   bigAt: number;
+  /** 直前の段で汚れていたレーン。続けて同じ側にしないために覚えておく。 */
+  lastDirtyLane: number;
 
   deerTimer: number;
-  /** 反対側と近すぎて出せなかった回数。詰まりすぎたときの逃げ道に使う。 */
   deerBlocked: number;
   senbeiTimer: number;
   sceneryTimer: number;
 
-  /** 画面に一瞬出す一言。 */
   banner: string;
   bannerT: number;
 
@@ -113,12 +104,10 @@ export interface State {
   intro: number;
 
   /** 集計（検証用）。 */
-  /** わざと重ねて出した回数。**上手い人が食うのはここだけ**であるべき。 */
   clashSpawns: number;
   poopHits: number;
   deerHits: number;
   dodges: number;
-  /** 大きいフンをとびこえた回数／踏んだ回数。 */
   jumps: number;
   jumpMiss: number;
   nices: number;
@@ -138,27 +127,43 @@ export function resetRun(s: State): void {
   s.score = 0;
   s.dirt = 0;
   s.down = false;
-  s.split = 0.62;
-  s.lastLook = -9;
   s.wasDown = false;
+  s.lane = 0;
+  s.lx = 0;
+  s.split = C.SPLIT_UP;
+  s.lastLook = -9;
+  s.lastMove = -9;
   s.trip = 0;
-  s.stepping = 0;
   s.hop = 0;
   s.walkAcc = 0;
   s.poops = [];
   s.deer = [];
   s.senbeis = [];
+  /**
+   * **並木を先に並べておく。**
+   * 空の状態から出しはじめると、最初の9秒ほど脇に何も無く、
+   * 参道が「どこまでも続く白い帯」になって奥行きも速さも伝わらない。
+   */
   s.scenery = [];
+  for (let z = 90; z < C.DEER_Z; z += 90 + Math.random() * 110) {
+    s.scenery.push({
+      z,
+      side: Math.random() < 0.5 ? -1 : 1,
+      kind: Math.random() < 0.25 ? "lantern" : "tree",
+    });
+  }
   s.intro = C.INTRO_TIME;
-  s.deerBlocked = 0;
-  s.nextStoneAt = C.VIEW.w;
+  // 見える距離から作りはじめる。1フレーム目で GEN_Z まで一気に埋まる
+  s.nextStepZ = C.POOP_SEE;
   s.runLeft = 0;
-  s.runDirty = false;
   s.runLen = 0;
+  s.runDirty = false;
   s.bigAt = -1;
-  s.deerTimer = 4.4;
+  s.lastDirtyLane = -1;
+  s.deerTimer = 4.2;
+  s.deerBlocked = 0;
   s.senbeiTimer = 6;
-  s.sceneryTimer = 0.5;
+  s.sceneryTimer = 0;
   s.banner = "";
   s.bannerT = 0;
   s.clashSpawns = 0;

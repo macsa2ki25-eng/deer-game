@@ -1,43 +1,45 @@
 /**
- * 描画。**画面はふたつの帯でできている。**
+ * 描画。**画面の上が遠く、下が足元。**参道をまっすぐ奥へ歩いている。
  *
- *   上帯 = 前方。参道の奥から鹿が歩いてくる
- *   下帯 = 足元。地面のフンが右から左へ流れる
+ * 横スクロール版は帯をふたつ並べて別々の絵を描いていたが、
+ * 縦なら**上下がそのまま奥行き**なので、ひと続きの絵が1枚あれば済む。
+ * 「まえ」「あしもと」という札も要らない。
  *
- * 視線を切り替えると**仕切りが動く**。ここで絵を拡大縮小しないのが肝で、
- * ドット絵を縦に潰すと一発で嘘くさくなる。大きさは常に同じまま、
- * **見えている範囲（切り取る量）だけ**を増やす。
- *
- * 見ていない側は暗幕をかぶせるが、**真っ暗にはしない**。
- * 完全に見えないと「いつ切り替えるか」が当てずっぽうになって理不尽になる。
- * 読めるが、読むのに注意がいる、くらいがちょうどいい。
+ * 見ていない側には暗幕をかける。**そして見えないものは描かない**——
+ * 下を向いているあいだ鹿は1枚も描かず、顔を上げているあいだフンを描かない。
+ * 薄い暗幕で「読めるが読みにくい」にしていたら、下を向いたまま鹿を見張れて
+ * しまい、それだけで芯が死んだ。ここは絵として本当に無くす。
  */
 
 import * as C from "./config";
 import type { State } from "./state";
-import { HUD, SPR, type Sprite } from "./sprites";
+import { HUD, SPR, pick, type Sprite } from "./sprites";
+
+const CX = C.VIEW.w / 2;
+/** 足元での参道の半幅。 */
+const ROAD_HALF = C.ROAD_NEAR / 2;
 
 const COL = {
-  sky: "#8fb3c9",
-  skyLow: "#c3d2cf",
-  far: "#6d8a5c",
-  ground: "#c9c2a6",
-  pebble: "#9aa08a",
-  // 石畳。写真の板石に合わせて、灰色に少し緑と桃を混ぜた3種。
-  joint: "#6f6a5c",
-  stoneA: "#b9b5a4",
-  stoneB: "#a8a795",
-  stoneC: "#c6c0ad",
-  groundDark: "#b5ad90",
-  groundLight: "#d8d4bc",
-  line: "#a89f80",
+  sky: "#93b6c9",
+  skyLow: "#cbd6cd",
+  hill: "#5c7a4e",
+  hillDark: "#455f3b",
+  earth: "#6b6a4e",
+  earthDark: "#585739",
+  // 石畳。写真の板石に合わせて、灰色に少し緑と桃を混ぜる。
+  slabA: "#bab6a5",
+  slabB: "#aaa997",
+  slabC: "#c7c1ae",
+  slabD: "#b2ae9c",
+  joint: "#6e6a5c",
+  edge: "#8d8a76",
   hud: "#11140e",
   ink: "#201a24",
 };
 
-/** 砂利。決まった模様にして、毎フレーム描き直しても暴れないようにする。 */
-function gravelAt(x: number, y: number): number {
-  const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+/** 決まった模様。毎フレーム描き直しても暴れない。 */
+function hash(a: number, b: number): number {
+  const n = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453;
   return n - Math.floor(n);
 }
 
@@ -72,281 +74,254 @@ function drawHud(ctx: CanvasRenderingContext2D, s: State): void {
     ctx.drawImage(i < s.dirt ? HUD.shoeBad : HUD.shoeOk, 3 + i * (SHOE + 1), 3);
   }
 
-  // スコア。いちばん大きい数字＝スコア、で通じるのでラベルは要らない。
   const score = String(Math.floor(s.score));
   let w = 0;
   for (const ch of score) w += (HUD.num[ch]?.width ?? 3) + 1;
   text(ctx, HUD.num, score, C.VIEW.w - w - 2, 4, 1);
 }
 
+/** 画面のy → 遠近の比（1が足元、0が地平）。 */
+function scaleAtY(y: number): number {
+  return (y - C.HORIZON) / (C.KID_Y - C.HORIZON);
+}
+
 /**
- * 前方の帯。
+ * 参道。**1行ずつ、その行がどれだけ遠いかを出して塗る。**
  *
- * **地面を帯の下端ではなく、下から 26px に置く。**
- * 最初は下端に置いたが、そうすると帯の残り全部が空になり、
- * 画面のほとんどが「何も起きない水色」になった。速さも伝わらない。
- * いまは 空 → 並木 → 土手 → 参道 を上から詰めて、帯を埋めている。
- * 木は奥のものなので**ゆっくり流れる**（視差）。これが速さの下支えになる。
+ * 写真の参道は大きな板石が2列に並んでいて、子どもは
+ * **どの石に足を置くか選びながら**歩いていた。
+ * ここでは石の2列が、そのままふたつのレーンになっている——
+ * 何を選んでいるのかが、絵だけで分かる。
  */
-function drawAhead(ctx: CanvasRenderingContext2D, s: State, top: number, h: number): void {
-  if (h <= 0) return;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, top, C.VIEW.w, h);
-  ctx.clip();
-
-  const base = top + h;          // 参道の面（子どもと鹿が立つ高さ）
-  const bank = base - 10;        // 土手の上端
-  const treeBase = bank + 3;     // 木の根元
-
-  const grd = ctx.createLinearGradient(0, top, 0, bank);
+function drawRoad(ctx: CanvasRenderingContext2D, s: State): void {
+  const grd = ctx.createLinearGradient(0, C.HUD_H, 0, C.HORIZON);
   grd.addColorStop(0, COL.sky);
   grd.addColorStop(1, COL.skyLow);
   ctx.fillStyle = grd;
-  ctx.fillRect(0, top, C.VIEW.w, h);
+  ctx.fillRect(0, C.HUD_H, C.VIEW.w, C.HORIZON - C.HUD_H);
 
-  // 並木。**奥（treeFar）を先に、手前（tree）を後に描く。**
-  // 流れる速さも変えてあるので、走ると奥行きが出る。速さの下支え。
-  for (const g of s.scenery) {
-    if (g.kind !== "treeFar") continue;
-    ctx.drawImage(SPR.treeFar, Math.round(g.x), treeBase - 7 - SPR.treeFar.height);
-  }
-  for (const g of s.scenery) {
-    if (g.kind === "treeFar") continue;
-    const spr = g.kind === "tree" ? SPR.tree : SPR.lantern;
-    ctx.drawImage(spr, Math.round(g.x), treeBase - spr.height);
-  }
+  // 地平の向こうの山影。奥行きの底を作る
+  ctx.fillStyle = COL.hillDark;
+  ctx.fillRect(0, C.HORIZON - 5, C.VIEW.w, 5);
+  ctx.fillStyle = COL.hill;
+  ctx.fillRect(0, C.HORIZON - 2, C.VIEW.w, 2);
 
-  ctx.fillStyle = COL.far;
-  ctx.fillRect(0, bank, C.VIEW.w, base - bank);
+  const BAND = 34;          // 板石1枚ぶんの奥行き[px]
+  let lastBand = Number.NaN;
+  for (let y = C.HORIZON; y < C.VIEW.h; y++) {
+    const sc = scaleAtY(y);
+    const z = C.Z0 / Math.max(0.02, sc) - C.Z0;
+    const half = ROAD_HALF * sc;
+    const l = Math.round(CX - half);
+    const r = Math.round(CX + half);
 
-  ctx.fillStyle = COL.ground;
-  ctx.fillRect(0, base - 4, C.VIEW.w, 4);
-  ctx.fillStyle = COL.groundDark;
-  ctx.fillRect(0, base - 4, C.VIEW.w, 1);
-
-  for (const b of s.senbeis) {
-    if (b.taken) continue;
-    const bob = Math.sin(s.t * 6 + b.x * 0.1) * 1.5;
-    ctx.drawImage(SPR.senbei, Math.round(b.x), Math.round(base - 26 + bob));
-  }
-
-  /**
-   * **下を向いているあいだは、鹿を描かない。**
-   *
-   * 暗幕を薄くして「読めるが読みにくい」にしていたが、読める以上は
-   * 下を向いたまま鹿を監視できてしまい、「ずっと押して鹿が来たら離す」が
-   * 最適手になっていた。それではフンを見る理由が無い。
-   * 見えないからこそ「急に来てびっくり」になる。
-   */
-  if (!s.down) {
-    const frame = Math.floor(s.walkAcc / 9) % 2;
-    for (const d of s.deer) {
-      ctx.drawImage(SPR.deer[frame], Math.round(d.x), base - 4 - C.DEER_SIDE.h);
+    /**
+     * 参道の外。**縞にすると畝のように見える**ので、
+     * 決まった式でまだらにする。奥へ行くほど細かくなって、これも奥行きになる。
+     */
+    const band4 = Math.floor((s.dist + z) / 9);
+    for (let x = 0; x < C.VIEW.w; x += 4) {
+      ctx.fillStyle = hash(x >> 2, band4) < 0.42 ? COL.earthDark : COL.earth;
+      ctx.fillRect(x, y, 4, 1);
     }
+
+    const band = Math.floor((s.dist + z) / BAND);
+    const alt = ((band % 2) + 2) % 2;
+    ctx.fillStyle = alt ? COL.slabA : COL.slabC;
+    ctx.fillRect(l, y, Math.max(1, CX - l), 1);
+    ctx.fillStyle = alt ? COL.slabD : COL.slabB;
+    ctx.fillRect(Math.round(CX), y, Math.max(1, r - CX), 1);
+
+    // 石の継ぎ目。奥ほど詰まって見えるので、遠近がそのまま速さになる
+    if (band !== lastBand) {
+      ctx.fillStyle = COL.joint;
+      ctx.fillRect(l, y, Math.max(1, r - l), 1);
+      lastBand = band;
+    }
+    /**
+     * **まん中の目地＝レーンの境目。**
+     * ここが読めないと「左か右か」というゲームであることが伝わらない。
+     * 手前ほど太くして、石が2列に並んでいるように見せる。
+     */
+    const mid = Math.max(1, Math.round(3 * sc));
+    ctx.fillStyle = COL.joint;
+    ctx.fillRect(Math.round(CX) - Math.ceil(mid / 2), y, mid, 1);
+    ctx.fillStyle = COL.edge;
+    ctx.fillRect(l, y, 1, 1);
+    ctx.fillRect(r - 1, y, 1, 1);
   }
+}
 
-  /**
-   * 子ども。前を見ているか下を向いているかは、**顔で分かる**のがいちばん速い。
-   *
-   * とんでいる1コマだけは、ここで持ち上げて描く。大きいフンを越えた瞬間は
-   * 顔が上がっているので足元の帯が暗く、**この絵しか成否を伝えるものが無い**。
-   */
-  const jumping = s.hop > 0 && s.trip <= 0;
-  const kid = s.trip > 0 ? SPR.kidTrip : jumping ? SPR.kidJump : s.down ? SPR.kidDown : SPR.kidUp;
-  const lift = jumping ? 3 : 0;
-  ctx.drawImage(kid, C.KID_X - 3, base - 4 - C.KID_HEAD.h - lift);
+/** レーン中心の画面x。 */
+function laneX(lane: number, sc: number): number {
+  return CX + (C.LANE_X[lane] - CX) * sc;
+}
+/** `lx`（小数）の画面x。見た目だけに使う。 */
+function lxToX(lx: number, sc: number): number {
+  const a = C.LANE_X[0];
+  const b = C.LANE_X[1];
+  return CX + (a + (b - a) * lx - CX) * sc;
+}
 
-  ctx.restore();
+/** 奥のものから順に描く。手前が奥を隠す。 */
+function byDepth<T extends { z: number }>(list: T[]): T[] {
+  return [...list].sort((a, b) => b.z - a.z);
+}
+
+function drawSprite(
+  ctx: CanvasRenderingContext2D, spr: Sprite, x: number, y: number,
+): void {
+  ctx.drawImage(spr, Math.round(x - spr.width / 2), Math.round(y - spr.height));
 }
 
 /**
- * 足元の帯。**横から見た、足元のアップ。**
- *
- * 上帯と同じ場面を「近く」で見ているだけ。
- * 一度は真上から見た絵にしていたが、「足元を映しているとわかりにくい」と言われた。
- * 理屈（目の使い方が違う）としては筋が通っていたが、伝わらないなら負け。
- *
- * **フンは靴と同じ線を通る。**帯いっぱいに散らしていたのをやめた。
- * 当たりに効かないから安全、というのは作り手の理屈で、
- * 遊ぶ側からは「足と関係ない場所のフンを避けている」ようにしか見えない。
+ * 足元の影。**これが無いと、地面の上ではなく宙に貼ってあるように見える。**
+ * 遠近で縮むので、どのくらい遠いかの手がかりにもなる。
  */
-function drawGround(ctx: CanvasRenderingContext2D, s: State, top: number, h: number): void {
-  if (h <= 0) return;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, top, C.VIEW.w, h);
-  ctx.clip();
-
-  /**
-   * 地面の線を**帯の上のほうに置く**。ここを靴とフンが通る。
-   *
-   * 最初は帯の下端に置いたが、そうすると帯の3/4が空になった。
-   * **下を向いたとき、目に入るのはほとんど地面**なので、逆が正しい。
-   * 線から下はぜんぶ砂利（手前の地面）で埋まる。
-   */
-  const base = top + Math.round(h * 0.24);
-
-  ctx.fillStyle = COL.skyLow;
-  ctx.fillRect(0, top, C.VIEW.w, Math.max(0, base - top));
-
-  /**
-   * **石畳。** 砂利をやめてこれにした。
-   *
-   * 写真の参道は大きな板石が並んでいて、子どもは
-   * **どの石に足を置くか選びながら**歩いていた。足元がただの砂地だと
-   * 「地面」でしかないが、石が並んでいると「マス目」に見える——
-   * 何を見ればいいのかが、絵だけで分かる。
-   *
-   * 石の並びは決まった式から出しているので、作り直しても同じ模様が出る。
-   */
-  ctx.fillStyle = COL.joint;
-  ctx.fillRect(0, base, C.VIEW.w, top + h - base);
-
-  /**
-   * **手前ほど大きく。** 等間隔の格子にしたら煉瓦の壁に見えた。
-   * 写真の参道は、近くの石が大きく、奥へいくほど詰まって見える。
-   * 縦の高さと横幅の両方を手前ほど広げると、床として立ち上がる。
-   */
-  const gh = Math.max(1, top + h - base);
-  const scroll = Math.floor(s.dist);
-  const ROWS = 5;
-  // 手前ほど厚い行にする（重みが 1,2,3,... の比）
-  let weight = 0;
-  for (let r = 0; r < ROWS; r++) weight += r + 1;
-  let ry = base;
-  for (let r = 0; r < ROWS; r++) {
-    const rh = Math.max(3, Math.round((gh * (r + 1)) / weight));
-    const near = (r + 1) / ROWS;             // 0〜1。手前ほど1に近い
-    const sw = Math.round(C.STONE_W * (0.55 + near * 0.75));
-    const off = Math.floor(scroll * (0.72 + near * 0.35));
-    const stagger = r * 17;
-    const first = Math.floor((off - stagger) / sw);
-    for (let i = -1; i < C.VIEW.w / sw + 2; i++) {
-      const idx = first + i;
-      const sx = idx * sw - off + stagger;
-      const n = gravelAt(idx * 7, r * 31);
-      const w = sw - 2 - Math.round(n * 4);
-      ctx.fillStyle = n < 0.3 ? COL.stoneA : n < 0.62 ? COL.stoneB : COL.stoneC;
-      ctx.fillRect(sx, ry, w, Math.max(1, rh - 2));
-      ctx.fillStyle = "rgba(255,255,255,.10)";
-      ctx.fillRect(sx, ry, w, 1);
-    }
-    ry += rh;
-  }
-
-  // **フンは地面の線の上。靴と同じ高さを通る。**
-  /**
-   * フン。**大きいのは「またぐもの」なので、見てすぐ分かる必要がある。**
-   * 同じ茶色の塊が大小あるだけだと、来てから気づいて間に合わない。
-   * 影を落として、地面から盛り上がって見えるようにしてある。
-   */
-  for (const p of s.poops) {
-    const spr = p.big ? SPR.poopBig : SPR.poop;
-    const x = Math.round(p.x);
-    if (p.big) {
-      ctx.fillStyle = "rgba(32,26,36,.32)";
-      ctx.fillRect(x - 2, base + 1, spr.width + 4, 3);
-    }
-    ctx.drawImage(spr, x, base - spr.height + 2);
-  }
-
-  // 足。跨いだ瞬間だけ前足が上がる——「自分で避けた」感はこの1コマで出る。
-  const legs = s.trip > 0
-    ? SPR.legs[0]
-    : s.stepping > 0
-      ? SPR.legsStep
-      : SPR.legs[Math.floor(s.walkAcc / 11) % 2];
-  ctx.drawImage(legs, C.KID_X - 8, base - legs.height + 4);
-
-  ctx.restore();
+function shadow(ctx: CanvasRenderingContext2D, x: number, y: number, w: number): void {
+  if (w < 3) return;
+  ctx.fillStyle = "rgba(28,24,18,.28)";
+  ctx.fillRect(Math.round(x - w / 2), Math.round(y) - 1, Math.round(w), 2);
+  ctx.fillRect(Math.round(x - w / 2) + 1, Math.round(y) - 2, Math.round(w) - 2, 1);
 }
 
-/** 帯の名前。**初見で何を見ているか分からない**と言われたので、書いてある。 */
-function bandLabel(
-  ctx: CanvasRenderingContext2D, str: string, x: number, y: number, on: boolean,
-): void {
-  ctx.font = "7px monospace";
-  ctx.fillStyle = on ? "rgba(242,227,200,.85)" : "rgba(242,227,200,.35)";
-  ctx.fillText(str, x, y);
+/** 参道の脇の並木。奥行きの手がかりで、速さの下支えになる。 */
+function drawScenery(ctx: CanvasRenderingContext2D, s: State): void {
+  for (const g of byDepth(s.scenery)) {
+    if (g.z <= 0) continue;
+    const sc = C.scaleOf(g.z);
+    const y = C.yOf(g.z);
+    const x = CX + g.side * (ROAD_HALF + 26) * sc;
+    const set = g.kind === "tree" ? SPR.tree : SPR.lantern;
+    drawSprite(ctx, pick(set, sc), x, y);
+  }
+}
+
+export function render(ctx: CanvasRenderingContext2D, s: State): void {
+  drawRoad(ctx, s);
+  drawScenery(ctx, s);
+
+  for (const b of byDepth(s.senbeis)) {
+    if (b.taken || b.z <= 0 || b.z > C.POOP_SEE) continue;
+    const sc = C.scaleOf(b.z);
+    const bob = Math.sin(s.t * 6 + b.z * 0.05) * 2 * sc;
+    drawSprite(ctx, pick(SPR.senbei, sc), laneX(b.lane, sc), C.yOf(b.z) - 4 * sc + bob);
+  }
+
+  /**
+   * **フンは下を向いているあいだしか描かない。**
+   * 顔を上げたまま足元を確かめられるなら、下を向く理由がどこにも無くなる。
+   */
+  if (s.down) {
+    for (const p of byDepth(s.poops)) {
+      if (p.done || p.z <= 0 || p.z > C.POOP_SEE) continue;
+      const sc = C.scaleOf(p.z);
+      const y = C.yOf(p.z);
+      if (p.big) {
+        // 両レーンぶんの幅。**よけようがない**ことが幅で分かる
+        shadow(ctx, CX, y + 1, 34 * sc);
+        drawSprite(ctx, pick(SPR.poopBig, sc), CX, y);
+      } else {
+        drawSprite(ctx, pick(SPR.poop, sc), laneX(p.lane, sc), y);
+      }
+    }
+  }
+
+  /**
+   * 暗幕。**見ていない側を本当に隠す。**
+   * 下を向いていれば奥が、顔を上げていれば足元が消える。
+   */
+  const by = Math.round(C.HORIZON + (C.VIEW.h - C.HORIZON) * s.split);
+  ctx.fillStyle = `rgba(12,14,10,${C.DIM})`;
+  if (s.down) ctx.fillRect(0, C.HUD_H, C.VIEW.w, by - C.HUD_H);
+  else ctx.fillRect(0, by, C.VIEW.w, C.VIEW.h - by);
+  ctx.fillStyle = COL.ink;
+  ctx.fillRect(0, by - 1, C.VIEW.w, 1);
+
+  /**
+   * **鹿は顔を上げているあいだだけ。暗幕の上に描く。**
+   * 鹿は「奥にあるもの」なので、足元を隠す幕には隠されない。
+   * 目の前まで来たときに消えてしまうと、何に当たったのか分からなくなる。
+   */
+  if (!s.down) {
+    const frame = Math.floor(s.walkAcc / 22) % 2;
+    for (const d of byDepth(s.deer)) {
+      if (d.done || d.z <= 0) continue;
+      const sc = C.scaleOf(d.z);
+      const x = laneX(d.lane, sc);
+      shadow(ctx, x, C.yOf(d.z), 22 * sc);
+      drawSprite(ctx, pick(SPR.deer[frame], sc), x, C.yOf(d.z));
+    }
+  }
+
+  // 子ども。いつでも暗幕の上に描く——自分がどこに居るかは常に見えていい
+  const jumping = s.hop > 0 && s.trip <= 0;
+  const frame = Math.floor(s.walkAcc / 13) % 2;
+  const kid = s.trip > 0
+    ? SPR.kidTrip
+    : jumping
+      ? SPR.kidJump
+      : (s.down ? SPR.kidDown : SPR.kidUp)[frame];
+  const bob = s.trip > 0 ? 0 : Math.floor(s.walkAcc / 13) % 2;
+  const kx = lxToX(s.lx, 1);
+  shadow(ctx, kx, C.KID_Y + 1, jumping ? 10 : 14);
+  drawSprite(ctx, kid, kx, C.KID_Y + bob - (jumping ? 6 : 0));
+
+  drawHud(ctx, s);
+
+  if (s.intro > 0 && s.phase === "playing") introPrompt(ctx, s, by);
+
+  if (s.bannerT > 0 && s.banner) {
+    ctx.fillStyle = "rgba(17,20,14,.75)";
+    ctx.fillRect(0, C.KID_Y - 40, C.VIEW.w, 11);
+    ctx.fillStyle = "#f2e3c8";
+    ctx.font = "8px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(s.banner, CX, C.KID_Y - 32);
+    ctx.textAlign = "left";
+  }
 }
 
 /**
  * 教えているあいだの合図。
  *
  * 「何をやっているのかよくわからないまま終わった」への答え。
- * 説明文を増やすのではなく、**そのとき押すべきかどうかを、その場に出す**。
+ * 説明を増やすのではなく、**そのとき何をすべきかを、その場に出す**。
  */
-function introPrompt(ctx: CanvasRenderingContext2D, s: State, split: number): void {
-  /**
-   * 下を向くべきもの（小さいフン）と、顔を上げるべきもの（鹿・大きいフン）を、
-   * **足元に着くまでの時間**で比べる。距離で比べると、視差でゆっくり
-   * 近づいてくる鹿を近いものと見誤って、教え方が逆になる。
-   * **大きいフンは、とぶために顔を上げる側。**
-   */
-  const v = C.speedAhead(s.t);
-  let tDown = Infinity;
-  let tUp = Infinity;
+function introPrompt(ctx: CanvasRenderingContext2D, s: State, by: number): void {
+  const v = C.speed(s.t);
+  let best = Infinity;
+  let msg = "";
+
+  const consider = (t: number, m: string): void => {
+    if (t < best) {
+      best = t;
+      msg = m;
+    }
+  };
+
   for (const p of s.poops) {
-    if (p.done) continue;
-    const t = (p.x - C.KID_X) / v;
-    if (p.big) tUp = Math.min(tUp, t);
-    else tDown = Math.min(tDown, t);
+    if (p.done || p.z <= 0) continue;
+    if (p.big) consider(p.z / v, "▲ はなして とぶ");
+    else if (p.lane === s.lane) consider(p.z / v, p.lane === 0 ? "▶ みぎへ" : "◀ ひだりへ");
   }
   for (const d of s.deer) {
-    if (!d.done) tUp = Math.min(tUp, (d.x - C.KID_X) / (v * C.AHEAD_PARALLAX));
+    if (d.done || d.z <= 0 || d.lane !== s.lane) continue;
+    consider(d.z / (v + C.DEER_SPEED), d.lane === 0 ? "▶ みぎへ" : "◀ ひだりへ");
   }
 
-  if (Math.min(tDown, tUp) > 1.2) return;   // まだ先。出すには早い
-  const wantDown = tDown <= tUp;
+  // 何も来ていないときは、顔を上げて確かめることを教える
+  if (best > 1.5) {
+    if (!s.down) return;
+    msg = "▲ はなすと 前が見える";
+  }
 
-  const msg = wantDown ? "▼ おす" : "▲ はなす";
-  const ok = wantDown === s.down;
-  const y = wantDown ? split + 24 : C.HUD_H + 24;
-
-  ctx.font = "bold 11px monospace";
+  ctx.font = "bold 10px monospace";
   ctx.textAlign = "center";
-  ctx.fillStyle = "rgba(17,20,14,.7)";
-  ctx.fillRect(C.VIEW.w / 2 - 30, y - 10, 60, 14);
-  ctx.fillStyle = ok ? "#7fae4e" : "#e6c06a";
-  ctx.fillText(msg, C.VIEW.w / 2, y);
+  const w = ctx.measureText(msg).width + 12;
+  ctx.fillStyle = "rgba(17,20,14,.72)";
+  ctx.fillRect(CX - w / 2, by - 26, w, 15);
+  ctx.fillStyle = "#e6c06a";
+  ctx.fillText(msg, CX, by - 15);
   ctx.textAlign = "left";
-}
-
-export function render(ctx: CanvasRenderingContext2D, s: State): void {
-  const split = Math.round(C.HUD_H + C.FIELD_H * s.split);
-  const aheadH = split - C.HUD_H;
-  const groundH = C.VIEW.h - split;
-
-  drawAhead(ctx, s, C.HUD_H, aheadH);
-  drawGround(ctx, s, split, groundH);
-
-  // 見ていない側に暗幕。ここが「どっちを見ているか」のいちばん強い合図になる。
-  ctx.fillStyle = `rgba(12,14,10,${C.DIM})`;
-  if (s.down) ctx.fillRect(0, C.HUD_H, C.VIEW.w, aheadH);
-  else ctx.fillRect(0, split, C.VIEW.w, groundH);
-
-  // 仕切りの線
-  ctx.fillStyle = COL.ink;
-  ctx.fillRect(0, split - 1, C.VIEW.w, 1);
-
-  // どっちの帯が何なのかを書いておく。初見で分かることのほうが、
-  // 画面がすっきりしていることより大事。
-  bandLabel(ctx, "まえ", 3, C.HUD_H + 9, !s.down);
-  bandLabel(ctx, "あしもと", 3, split + 9, s.down);
-
-  drawHud(ctx, s);
-
-  // 教えているあいだは、**次に来るものと、いま何をすべきか**を出す。
-  if (s.intro > 0 && s.phase === "playing") introPrompt(ctx, s, split);
-
-  if (s.bannerT > 0 && s.banner) {
-    ctx.fillStyle = "rgba(17,20,14,.75)";
-    ctx.fillRect(0, split - 12, C.VIEW.w, 11);
-    ctx.fillStyle = "#f2e3c8";
-    ctx.font = "8px monospace";
-    ctx.textAlign = "center";
-    ctx.fillText(s.banner, C.VIEW.w / 2, split - 4);
-    ctx.textAlign = "left";
-  }
 }
