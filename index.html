@@ -57,7 +57,8 @@
   }
   .screen.show{display:flex}
   h1{font-size:clamp(24px,8vmin,38px);letter-spacing:.04em;line-height:1.3}
-  .sub{font-size:13px;color:var(--muted);line-height:1.9}
+  /* 幅を止めないと、長い一行が画面の端まで伸びて読めなくなる。 */
+  .sub{font-size:13px;color:var(--muted);line-height:1.9;max-width:330px;margin-inline:auto}
   /* でかいフンだけは「見る側」と「越える側」が逆なので、そこだけ強く出す。
      クラス名を .big にすると、下のスコア用 .big と font-size を取り合う。 */
   .sub.jump{margin-top:10px;color:#e8dcc2}
@@ -72,9 +73,10 @@
   button:hover{filter:brightness(1.1)}
   [hidden]{display:none !important}
 
+  /* 幅を指定しないと、縦並びの中で内容ぶんに縮んで、札の中で改行が起きる。 */
   .how{
     display:flex;gap:14px;justify-content:center;font-size:12px;
-    color:var(--muted);line-height:1.7;max-width:340px;
+    color:var(--muted);line-height:1.7;width:100%;max-width:340px;
   }
   .how div{flex:1;border:1px solid var(--line);padding:10px 8px}
   .how b{display:block;color:var(--ink);font-size:13px;margin-bottom:4px}
@@ -95,13 +97,13 @@
     <section class="screen" id="sc-title">
       <h1>下ばっか見てると</h1>
       <div class="how">
-        <div><b>さわる</b>下をみる<br>さわった がわへ<br><small>鹿は 見えない</small></div>
-        <div><b>はなす</b>前をみる<br>鹿が 見える<br><small>足元は 見えない</small></div>
+        <div><b>さわる</b>下をみる<br>さわった ほうへ<br><small>鹿は見えない</small></div>
+        <div><b>はなす</b>前をみる<br>鹿が見える<br><small>足元は見えない</small></div>
       </div>
-      <p class="sub">画面の 左半分か 右半分。それだけです</p>
+      <p class="sub">さわるのは 画面の 左半分か 右半分。それだけ</p>
       <p class="sub jump">でかいフンは <b>とびこえる</b><br>
-        <small>両方のレーンをふさぐので よけられません。<br>
-        とぶには助走がいる＝<b>手をはなしているあいだだけ</b>跳べます</small></p>
+        <small>両レーンをふさぐので よけられません。<br>
+        跳べるのは <b>手をはなしているあいだ</b>だけ</small></p>
       <button id="btn-start">はじめる</button>
       <div id="settings">
         <label><input id="sound" type="checkbox" checked>音</label>
